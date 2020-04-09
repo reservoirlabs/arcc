@@ -6,8 +6,8 @@
 # $Id$
 #
 
-import re, StringIO, token, tokenize
-import meta_data_info
+import re, io, token, tokenize
+from . import meta_data_info
 
 #----------------------------------------------------------
 
@@ -192,11 +192,10 @@ class MetaDataParser:
         '''Parse the given text and extract the meta data information.'''
 
         # Tokenize the given text using the Python-source tokenizer
-        token_infos = tokenize.generate_tokens(StringIO.StringIO(text).readline)
+        token_infos = tokenize.generate_tokens(io.StringIO(text).readline)
 
         # Remove all whitespace tokens
-        token_infos = filter(lambda(x): not (x[1].isspace() or x[0] == token.DEDENT), 
-                             token_infos)
+        token_infos = [x for x in token_infos if not (x[1].isspace() or x[0] == token.DEDENT)]
 
         # Parse using the generated tokens
         mdata = None
@@ -250,7 +249,7 @@ class MetaDataParser:
             f = open(fname, 'r')
             text = f.read()
             f.close()
-        except Exception, e:
+        except Exception as e:
             raise self.__reporter.error(e)
         
         # Replace comments with whitespaces

@@ -43,7 +43,7 @@ class MetaDataInfo:
         
         try:
             n_opt = eval(self.option)
-        except Exception, e:
+        except Exception as e:
             raise self.__reporter.error('Invalid option string for "%s" in "%s"' % (self.option, self.ID))
         if type(n_opt) != str:
             raise self.__reporter.error('Option value in "%s" must be of a string type' % self.ID)
@@ -66,7 +66,7 @@ class MetaDataInfo:
                 assert type(vals) == str, 'variable values must be initially of string types'
                 n_vals = eval(vals)
                 n_var_vals_list.append(n_vals)
-            except Exception, e:
+            except Exception as e:
                 raise self.__reporter.error('Invalid variable values expression for "%s" in "%s"' % (v, self.ID))
             if type(n_vals) != list:
                 raise self.__reporter.error('Variable values expression for "%s" in "%s" must be of a list type' % (v, self.ID))
@@ -86,7 +86,7 @@ class MetaDataInfo:
             self.constraint = re.sub(r'(\W)(%s)(\W)' % v, r'\1%s_\2\3' % self.ID, ' %s ' % self.constraint).strip()
 
         # Rename the variable names
-        self.var_list = map(lambda(x): '%s_%s' % (self.ID, x), self.var_list)
+        self.var_list = ['%s_%s' % (self.ID, x) for x in self.var_list]
 
     #------------------------------------------------------
 
@@ -99,7 +99,7 @@ class MetaDataInfo:
         vals = []
         for i, c in enumerate(this_coord):
             vals.append(self.var_vals_list[i][c])
-        if self.next == None:
+        if self.__next__ == None:
             return vals 
         else:
             return vals + self.next.__coordToVarVals(rest_coord)
@@ -117,9 +117,9 @@ class MetaDataInfo:
         mdata = self
         while mdata != None:
             vars.extend(mdata.var_list)
-            mdata = mdata.next
+            mdata = mdata.__next__
         vals = self.__coordToVarVals(coord)
-        return dict(zip(vars, vals))
+        return dict(list(zip(vars, vals)))
 
     #------------------------------------------------------
 
@@ -130,7 +130,7 @@ class MetaDataInfo:
             assert False, 'invalid negative dimension index'
         elif i < len(self.var_list):
             return len(self.var_vals_list[i])
-        elif self.next != None:
+        elif self.__next__ != None:
             return self.next.__dimSizeAt(i - len(self.var_list))
         else:
             assert False, 'invalid given dimension index'
@@ -140,7 +140,7 @@ class MetaDataInfo:
     def __totalDimNum(self):
         '''Return the total dimension'''
 
-        if self.next == None:
+        if self.__next__ == None:
             return len(self.var_list) 
         else:
             return len(self.var_list) + self.next.__totalDimNum()
@@ -170,8 +170,8 @@ class MetaDataInfo:
 
         # Look for an empty next link
         cur_mdata = self
-        while cur_mdata.next != None:
-            cur_mdata = cur_mdata.next
+        while cur_mdata.__next__ != None:
+            cur_mdata = cur_mdata.__next__
         
         # Append the new meta data
         cur_mdata.next = mdata
@@ -215,13 +215,13 @@ class MetaDataInfo:
         while mdata != None:
             try:
                 is_not_pruned = is_not_pruned and eval(mdata.constraint, env)
-            except Exception, e:
+            except Exception as e:
                 raise self.__reporter.error('Invalid constraint for %s: %s' % (mdata.ID, mdata.constraint))
             try:
                 is_not_pruned = is_not_pruned and eval(mdata.global_constraint, env)
-            except Exception, e:
+            except Exception as e:
                 raise self.__reporter.error('Invalid global constraint: "%s"' % mdata.global_constraint)
-            mdata = mdata.next
+            mdata = mdata.__next__
         return is_not_pruned
 
     #------------------------------------------------------
@@ -247,7 +247,7 @@ class MetaDataInfo:
             for v in re.findall('\$\w+\$', n_opt):
                 raise self.__reporter.error('Undefined variable "%s" in the option of %s' % (v, mdata.ID))
             opts.append((mdata.ID, n_opt))
-            mdata = mdata.next
+            mdata = mdata.__next__
         return opts
 
     #------------------------------------------------------
@@ -274,7 +274,7 @@ class MetaDataInfo:
         meta_data_map[self.ID] = self
 
         # Recurse to the next meta data info
-        if self.next != None:
+        if self.__next__ != None:
             self.next.semantCheck(meta_data_map)
 
     #------------------------------------------------------

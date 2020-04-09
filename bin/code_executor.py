@@ -7,7 +7,8 @@
 #
 
 import os, subprocess, time
-import file_keeper
+from . import file_keeper
+from functools import reduce
 
 #----------------------------------------------------------
 
@@ -68,13 +69,13 @@ class CodeExecutor:
             f = open(self.__perf_fname, 'r')
             data = f.read()
             f.close()
-        except Exception, e:
+        except Exception as e:
             raise self.__reporter.error('Failed to read performance data from file "%s": ' % self.__perf_fname)
 
         # Measure the performance 
         perf_map = {}
-        for line in filter(lambda x: x != '' and not x.isspace(), data.split('\n')):
-            cols = filter(lambda x: x != '' and not x.isspace(), line.split(' '))
+        for line in [x for x in data.split('\n') if x != '' and not x.isspace()]:
+            cols = [x for x in line.split(' ') if x != '' and not x.isspace()]
             assert len(cols) == 2, 'a line of performance data must have two columns: an id and a number'
             pid, pnum = cols
             pnum = float(pnum)
@@ -83,7 +84,7 @@ class CodeExecutor:
             else:
                 perf_map[pid] = [pnum]
         perf = 0
-        for pnums in perf_map.values():
+        for pnums in list(perf_map.values()):
             perf += reduce(lambda x,y: x+y, pnums, 0) / len(pnums)
 
         # Delete the performance data file

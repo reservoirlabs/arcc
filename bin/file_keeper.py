@@ -102,8 +102,8 @@ class FileKeeper:
                                           self.__new_code_dir)) # exclude the directory used for storing
 
         # Filter out excluded files/directories that do not exist
-        excluded_files = filter(lambda x: os.path.exists(x), excluded_files)
-        excluded_dirs = filter(lambda x: os.path.exists(x), excluded_dirs)
+        excluded_files = [x for x in excluded_files if os.path.exists(x)]
+        excluded_dirs = [x for x in excluded_dirs if os.path.exists(x)]
 
         # Collect all files in the given path
         table = {}
@@ -171,7 +171,7 @@ class FileKeeper:
             f = open(fname, 'w')
             f.write(s)
             f.close()
-        except Exception, e:
+        except Exception as e:
             raise self.__reporter.error('Failed to write README file "%s" ' % fname)
 
     #------------------------------------------------------
@@ -210,7 +210,7 @@ class FileKeeper:
 
         # Store the new files and modified files
         prefix = os.path.abspath(os.curdir)
-        for f, mtime in cur_files_table.items():
+        for f, mtime in list(cur_files_table.items()):
             if f not in old_files_table or mtime > old_files_table[f]:
                 assert f.startswith(prefix), 'source file must be prefixed with the absolute current path'
                 src = f[len(prefix):].lstrip(os.sep)

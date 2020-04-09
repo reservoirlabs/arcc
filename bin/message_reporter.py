@@ -85,7 +85,7 @@ class MessageReporter:
             f = open(log_fname, 'w')
             f.write('')
             f.close()
-        except Exception, e:
+        except Exception as e:
             raise self.error('Failed to create log file: %s' % log_fname)
 
     #------------------------------------------------------
@@ -115,7 +115,7 @@ class MessageReporter:
             f = open(log_fname, 'a')
             f.write(msg + '\n')
             f.close()
-        except Exception, e:
+        except Exception as e:
             raise self.error('Failed to write to log file: %s' % log_fname)
 
     #------------------------------------------------------
@@ -145,7 +145,7 @@ class MessageReporter:
         '''Write the given message into the main log file'''
 
         msg = self.__message(msg)
-        if self.__verbose: print msg
+        if self.__verbose: print(msg)
         self.__appendToLog(msg, self.__main_log_fname)
         
     #------------------------------------------------------
@@ -155,7 +155,7 @@ class MessageReporter:
         
         self.__appendToLog(msg, self.__error_log_fname)
         msg = self.__message(msg)
-        if self.__verbose: print msg
+        if self.__verbose: print(msg)
         self.__appendToLog(msg, self.__main_log_fname)
         
     #------------------------------------------------------
@@ -165,6 +165,6 @@ class MessageReporter:
 
         self.__appendToLog(msg, self.__result_log_fname)
         msg = self.__message(msg)
-        if self.__verbose: print msg
+        if self.__verbose: print(msg)
         self.__appendToLog(msg, self.__main_log_fname)
         

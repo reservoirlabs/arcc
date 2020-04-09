@@ -8,14 +8,17 @@
 #
 
 
-import getopt, os, re, sys
-import code_executor, message_reporter, meta_data_parser, rstream_tunable_tactic_options
-import search.exhaustive_search, search.random_search, search.simplex_search
+import getopt
+import os
+import sys
+from . import code_executor, message_reporter, meta_data_parser, rstream_tunable_tactic_options
+sys.path.append('./search')
+from search import *
 
 #----------------------------------------------------------
 
 class ARCC:
-    '''The main class for ARCC (Auto-tuning R-Stream C Compiler)'''
+    """ The main class for ARCC (Auto-tuning R-Stream C Compiler) """
 
     # ARCC modes
     __PRODUCE_MODE = 'produce'
@@ -66,8 +69,7 @@ class ARCC:
     #------------------------------------------------------
     
     def __init__(self, script_name, argv):
-        '''Instantiate an ARCC object'''
-
+        """'''Instantiate an ARCC object"""
         # Remember the script name (e.g., arcc)
         self.__script_name = script_name
 
@@ -111,7 +113,7 @@ class ARCC:
     #------------------------------------------------------
 
     def __parseArgs(self, script_name, argv):
-        '''Parse the command line arguments'''
+        """Parse the command line arguments"""
 
         # Reporting tool
         reporter = message_reporter.MessageReporter(script_name, False, '')
@@ -123,7 +125,7 @@ class ARCC:
                                     ['help', 'build=', 'run=', 'clean=', 'keep', 'meta-data=', 'verbose', 'log=', 'max-trials=', 
                                      'random-seed=', 'exhaustive', 'random', 'simplex', 'produce', 'consume',
                                      'rough-perf', 'precise-perf', 'list', 'tune-all'])
-        except Exception, e:
+        except Exception as e:
             raise Exception('Error: %s \n %s' % (e, self.__usage_msg))
 
         # Set the options to their default values
@@ -146,7 +148,7 @@ class ARCC:
         # Get the options
         for opt, arg in opts:
             if opt in ('-h', '--help',):
-                print self.__usage_msg
+                print(self.__usage_msg)
                 sys.exit(1)
             elif opt in ('--list',):
                 list_tactic_options = True
@@ -200,7 +202,7 @@ class ARCC:
                 for i, (t, o, u, d) in enumerate(tactic_options_descriptions):
                     s += '| %2d. | %12s | %12s | %7s | %s \n' % (i+1, t, o, u, d)
                 s += '------------------------------------------------------------------------------\n' 
-            print s
+            print(s)
             sys.exit(1)
 
         # Semantic checks and evaluations of the options
@@ -221,14 +223,14 @@ class ARCC:
         if type(max_trials) == str:
             try:
                 max_trials = eval(max_trials)
-            except Exception, e:
+            except Exception as e:
                 raise reporter.error('Number of maximum trials must be a positive integer \n %s' % self.__usage_msg)
             if type(max_trials) != int or max_trials <= 0:
                 raise reporter.error('Number of maximum trials must be a positive integer \n %s' % self.__usage_msg)
         if type(random_seed) == str:
             try:
                 random_seed = eval(random_seed)
-            except Exception, e:
+            except Exception as e:
                 raise reporter.error('Random seed must be an integer \n %s' % self.__usage_msg)
             if type(random_seed) != int:
                 raise reporter.error('Random seed must be an integer \n %s' % self.__usage_msg)
@@ -245,7 +247,7 @@ class ARCC:
     #------------------------------------------------------
 
     def __printArgs(self):
-        '''Print the options used'''
+        """Print the options used"""
         
         s = ''
         s += 'Options used by ARCC: \n'
@@ -269,7 +271,7 @@ class ARCC:
     #------------------------------------------------------
 
     def __produceInit(self):
-        '''Sets environment variables to begin the produce mode'''
+        """Sets environment variables to begin the produce mode"""
 
         # Set the needed ARCC environment variables
         self.__reporter.logMessage('Sets environment variables: ')
@@ -281,7 +283,7 @@ class ARCC:
     #------------------------------------------------------
 
     def __produceExit(self):
-        '''Flushes environment variables to end the produce mode'''
+        """Flushes environment variables to end the produce mode"""
 
         # Flush the environment variables
         s = 'Flushes environment variables: %s, %s, %s' % (self.__ARCC_MODE, self.__ARCC_METADATA, self.__ARCC_OPTIONUSEMODE)
@@ -293,7 +295,7 @@ class ARCC:
     #------------------------------------------------------
 
     def __build(self):
-        '''Build the code and check the status'''
+        """Build the code and check the status"""
 
         # Clean previously generated codes (if needed) and build the code using RCC to generate the meta data file
         status = self.__executor.build()
@@ -307,11 +309,11 @@ class ARCC:
     #------------------------------------------------------
 
     def __produce(self):
-        '''
+        """
         Enter the production mode, where ARCC uses RCC to generate the
         meta data file containing all required information
         representing the tuning search space.
-        '''
+        """
 
         # Print some opening messages
         self.__reporter.logMessage('ARCC enters the production mode')
@@ -324,7 +326,7 @@ class ARCC:
             if os.path.exists(self.__meta_data_fname):
                 self.__reporter.logMessage('Previous meta data file %s exists. Deleting it now.' % self.__meta_data_fname)
                 os.unlink(self.__meta_data_fname)
-        except Exception, e:
+        except Exception as e:
             raise self.__reporter.error('Failed to delete meta data file: ' % self.__meta_data_fname)
 
         # Determine the use mode of the autotunable tactic options
@@ -371,7 +373,7 @@ class ARCC:
     #------------------------------------------------------
 
     def __extractMetaData(self):
-        '''Read and parse the meta data file to extract meta data information'''
+        """Read and parse the meta data file to extract meta data information"""
         
         # Check if the meta data file exists
         if not os.path.exists(self.__meta_data_fname):
@@ -386,7 +388,7 @@ class ARCC:
     #------------------------------------------------------
 
     def __consumeInit(self):
-        '''Sets environment variables to begin the consume mode'''
+        """Sets environment variables to begin the consume mode"""
 
         # Set the needed ARCC environment variables
         self.__reporter.logMessage('Sets environment variables: ')
@@ -400,7 +402,7 @@ class ARCC:
     #------------------------------------------------------
 
     def __consumeExit(self):
-        '''Flushes environment variables to end the consume mode'''
+        """Flushes environment variables to end the consume mode"""
 
         # Flush the environment variables
         s = 'Flushes environment variables: %s, %s, %s' % (self.__ARCC_MODE,
@@ -414,11 +416,11 @@ class ARCC:
     #------------------------------------------------------
 
     def __consume(self, mdata):
-        '''
+        """
         Enter the consumption mode, where ARCC empirically explores
         the tuning search space to find the best-performing code
         variant.
-        '''
+        """
 
         # Print some opening messages
         self.__reporter.logMessage('ARCC enters the consumption mode')
@@ -441,8 +443,7 @@ class ARCC:
     #------------------------------------------------------
 
     def __reportResults(self, perfs, mdata):
-        '''Make a report about the search results'''
-
+        """Make a report about the search results"""
         s = ''
         perf, coords = perfs
         for i, coord in enumerate(coords):
@@ -461,8 +462,7 @@ class ARCC:
     #------------------------------------------------------
 
     def __genBestCode(self, coord, mdata):
-        '''Generate the best-performing code'''
-
+        """Generate the best-performing code"""
         # Print some opening messages
         self.__reporter.logMessage('Generate the best-performing code (one that corresponds to coordinate %s) ' % coord)
 
@@ -479,33 +479,33 @@ class ARCC:
     #------------------------------------------------------
 
     def run(self):
-        '''
+        """
         Run the whole chain of R-Stream auto-tuning process, with
         fail-safe environmental variables flushing. Catch any error
         and properly flush ARCC-generated environment variables.
-        '''
+        """
 
         # Remove any ARCC-related environment variables that may be
         # existent from previous ARCC runs
-        for k in os.environ.keys():
+        for k in list(os.environ.keys()):
             if k.startswith('ARCC_'):
                 self.__reporter.logMessage('Warning: Found ARCC-related environment variable: %s. Flushing it now.' % k)
                 del os.environ[k]
                 
         # Remember all environment variables before running ARCC
-        before_evars = os.environ.keys()
+        before_evars = list(os.environ.keys())
 
         # Run ARCC, catch any exception, and remove any ARCC-related
         # environment variables (if any)
         try:
             self.__run()
-        except Exception, e:
+        except Exception as e:
 
             # Delete any ARCC-related environment variables that have
             # not been flushed. By convention, the variable names of
             # ARCC-related environment variables always have a prefix
             # of "ARCC_".
-            after_evars = os.environ.keys()
+            after_evars = list(os.environ.keys())
             for k in after_evars:
                 if k not in before_evars:
                     if k.startswith('ARCC_'):
@@ -520,7 +520,7 @@ class ARCC:
     #------------------------------------------------------        
 
     def __run(self):
-        '''(Internal) Run the whole chain of R-Stream auto-tuning process'''
+        """(Internal) Run the whole chain of R-Stream auto-tuning process"""
 
         # Print some opening messages
         self.__reporter.logMessage('ARCC starts')
