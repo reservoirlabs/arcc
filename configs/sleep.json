@@ -5,9 +5,20 @@
   "args": [
     {
       "name": "duration",
-      "format": "{val}",
+      "format": {
+        "cmd_line": "{val}"
+      },
       "range": {
-        "continuous": [0.1, 1.0]
+        "continuous": [0.0, 0.5]
+      }
+    },
+    {
+      "name": "env",
+      "format": {
+        "environment": "SOME_ENV"
+      },
+      "range": {
+        "discrete": ["val1", "val2", "val3"]
       }
     }
   ]

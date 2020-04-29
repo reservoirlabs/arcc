@@ -117,11 +117,14 @@ class ContinuousRange(DataRange):
         To mutate, get a new limited range centered at the current location,
         and get a uniform value up or down from that.
         """
-        mutation_range = (self.ub - self.lb) / 16
+        mutation_range = (self.ub - self.lb) / 8
+        new_lb = value - mutation_range
+        new_ub = value + mutation_range
+        val = ContinuousRange(new_lb, new_ub).get_arbitrary()
         # take into account our own bounds
-        new_lb = max(self.lb, value - mutation_range)
-        new_ub = min(self.ub, value + mutation_range)
-        return ContinuousRange(new_lb, new_ub).get_arbitrary()
+        val = max(self.lb, val)
+        val = min(self.ub, val)
+        return val
 
     def contains(self, val: Any) -> bool:
         assert isinstance(val, float)
@@ -148,12 +151,15 @@ class IntegralRange(DataRange):
         To mutate, get a new limited range centered at the current location,
         and get a uniform value up or down from that.
         """
-        # +15 to round up on mutation range
-        mutation_range = (self.ub - self.lb + 15) // 16
+        # +7 to round up on mutation range
+        mutation_range = (self.ub - self.lb + 7) // 8
+        new_lb = value - mutation_range
+        new_ub = value + mutation_range
+        val = IntegralRange(new_lb, new_ub).get_arbitrary()
         # take into account our own bounds
-        new_lb = max(self.lb, value - mutation_range)
-        new_ub = min(self.ub, value + mutation_range)
-        return IntegralRange(new_lb, new_ub).get_arbitrary()
+        val = max(self.lb, val)
+        val = min(self.ub, val)
+        return val
 
     def contains(self, val: Any) -> bool:
         assert isinstance(val, int)
@@ -191,21 +197,17 @@ class TunableArg:
     """
     Class representing an argument that can be tuned
     """
-    def __init__(self, name: str, format_str: str, data_range: DataRange):
+    def __init__(self, name: str, formatter: "FormatValue",
+                 data_range: DataRange):
         # name given to this arg
         self.name = name
         # string to format (should contain {key} or {val} where desired)
-        self.format_str = format_str
+        self.formatter = formatter
         # possible values for this arg
         self.data_range = data_range
 
     def __str__(self) -> str:
         return f"{self.name} ({self.data_range})"
-
-    def format_value(self, val: Any) -> str:
-        assert self.data_range.contains(val), \
-            f"invalid value {val} for data range {self.data_range}"
-        return self.format_str.format(key=self.name, val=str(val))
 
 
 def initialize_logger(log_file: Optional[str], verbose: bool):
@@ -235,6 +237,26 @@ def initialize_logger(log_file: Optional[str], verbose: bool):
     configure_handler(logging.StreamHandler())
     logger.debug("created logger")
     return logger
+
+
+class FormatValue(ABC):
+    """
+    Abstract base class for
+    """
+    pass
+
+
+class Environment(FormatValue):
+    def __init__(self, variable):
+        self.variable = variable
+
+
+class Cmdline(FormatValue):
+    def __init__(self, format_str):
+        self.format_str = format_str
+
+    def format_with(self, val: Any) -> str:
+        return self.format_str.format(val=val)
 
 
 def get_config() -> Config:
@@ -356,7 +378,23 @@ def production(data: List[Dict[str, Any]]) -> List[TunableArg]:
         else:
             assert False, f"unknown key: {key}"
 
-        tr.append(TunableArg(datum["name"], datum["format"], range_data))
+        # name, formatter
+        name = datum['name']
+        assert isinstance(name, str)
+        format_data = datum['format']
+        assert isinstance(format_data, dict)
+        assert len(format_data) == 1
+        format_type, format_data = list(format_data.items())[0]
+        assert isinstance(format_type, str)
+        if format_type == 'cmd_line':
+            assert isinstance(format_data, str)
+            formatter = Cmdline(format_data)
+        elif format_type == 'environment':
+            assert isinstance(format_data, str)
+            formatter = Environment(format_data)
+        else:
+            assert False, "unknown format type: " + format_type
+        tr.append(TunableArg(name, formatter, range_data))
     return tr
 
 
@@ -370,9 +408,9 @@ def consumption(config: Config):
 
     for run_id in config.run_iter():
         # get the next assignment to try from the strategy
-        next_assignment = config.search_strategy.get_assignment()
+        assignment = config.search_strategy.get_assignment()
         # the strategy finished early, exit
-        if next_assignment is None:
+        if assignment is None:
             break
         # create the new directory to run the test in
         out_dir = config.output.joinpath(f"run-{run_id}")
@@ -384,19 +422,40 @@ def consumption(config: Config):
             runtime = None
             error_occurred = False
             get_logger().info(f"run {run_id} with assignment "
-                              f"{next_assignment}")
-            print(str(next_assignment), file=out_file)
+                              f"{assignment}")
+            print(str(assignment), file=out_file)
             for stage in ["build", "run", "clean"]:
                 cmd = getattr(config, stage)
+                run_env = os.environ.copy()
                 if stage == "build":
-                    cmd = get_build_cmd(cmd, next_assignment)
+                    # in build mode, update our command/environment based on the
+                    # assignment. environment variables should be updated and
+                    # the build command should be run
+                    extra_args = ""
+                    for formatter, val in assignment.format_value_pairs():
+                        # command line formatter, add to command line
+                        if isinstance(formatter, Cmdline):
+                            extra_args += formatter.format_with(val) + " "
+                        # environment formatter, update command line
+                        elif isinstance(formatter, Environment):
+                            run_env[formatter.variable] = val
+                        else:
+                            assert False, f"unexpected formatter: {formatter}"
+
+                    extra_args = extra_args.strip()
+                    if "{}" in cmd:
+                        # if the command has {}, place them there
+                        cmd = cmd.replace("{}", extra_args)
+                    else:
+                        # otherwise, just place them at the end
+                        cmd = f"{cmd} {extra_args}"
                 # run the stage command, and handle any errors appropriately
                 get_logger().debug(f"running {stage} stage with {cmd}")
                 print(f"{out_dir}: {cmd}", file=out_file)
                 start = time.time()
                 proc = sp.run(cmd, shell=True, cwd=str(out_dir),
                               stdout=sp.PIPE, stderr=sp.STDOUT,
-                              encoding='utf-8')
+                              encoding='utf-8', env=run_env)
                 end = time.time()
                 if stage == "run":
                     runtime = end - start
@@ -415,7 +474,7 @@ def consumption(config: Config):
             # but that's unlikely
             if not error_occurred:
                 get_logger().info(f"successfully ran in {runtime}s")
-                config.search_strategy.notify_results(next_assignment, runtime)
+                config.search_strategy.notify_results(assignment, runtime)
 
     # finished all runs! clean up and print results
     get_logger().info(f"finished executing")
@@ -426,20 +485,6 @@ def consumption(config: Config):
         assignment, runtime = optimal
         get_logger().info(f"optimal assignment is {assignment} with runtime "
                           f"{runtime}s")
-        get_logger().info(f"reproduce with "
-                          f"`{get_build_cmd(config.build, assignment)}`")
-
-
-def get_build_cmd(cmd: str, assignment: "Assignment") -> str:
-    # build the command string to run by substituting in the
-    # tuned arguments where appropriate
-    tuned_args = assignment.merged_str()
-    if "{}" in cmd:
-        # if the command has {}, place them there
-        return cmd.replace("{}", tuned_args)
-    else:
-        # otherwise, just place them at the end
-        return f"{cmd} {tuned_args}"
 
 
 class Assignment:
@@ -459,8 +504,11 @@ class Assignment:
         """
         return {key: val for key, val in self.items}
 
-    def merged_str(self) -> str:
-        return ' '.join(key.format_value(val) for key, val in self.items)
+    def format_value_pairs(self) -> List[Tuple[FormatValue, Any]]:
+        """
+        Return the pairs of format values and values
+        """
+        return [(key.formatter, val) for key, val in self.items]
 
     def __str__(self) -> str:
         """
@@ -614,11 +662,13 @@ class MutationSearch(SearchStrategy):
                                for arg in self.tunable_args})
         else:
             mutated = list(self.curr_assignment.dict().items())
-            # choose a random argument to mutate, and mutate it
-            to_mutate = random.randint(0, len(mutated) - 1)
-            key, old_val = mutated[to_mutate]
-            new_val = key.data_range.mutate_value(old_val)
-            mutated[to_mutate] = key, new_val
+            # only if there's anything to mutate
+            if len(mutated) > 0:
+                # choose a random argument to mutate, and mutate it
+                to_mutate = random.randint(0, len(mutated) - 1)
+                key, old_val = mutated[to_mutate]
+                new_val = key.data_range.mutate_value(old_val)
+                mutated[to_mutate] = key, new_val
             # build and return the mutated assignment
             mutated = Assignment({key: val for key, val in mutated})
             return mutated
@@ -638,7 +688,7 @@ class MutationSearch(SearchStrategy):
             self.curr_time = runtime
         else:
             self.failed_mutations += 1
-            if self.failed_mutations == 10:
+            if self.failed_mutations == 5:
                 get_logger().debug("too many failed mutations, restarting")
                 self.curr_assignment = None
                 self.curr_time = None
