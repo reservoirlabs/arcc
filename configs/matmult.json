@@ -1,0 +1,6 @@
+{
+  "build": "cp $ARCC_HOME/configs/matmult.c matmult.c && rcc -fopenmp matmult.c -S -o matmult.gen.c --polymap {} && gcc -fopenmp -O3 matmult.gen.c -I$RSTREAM_HOME/runtime/common/include",
+  "run": "./a.out",
+  "clean": "",
+  "args": []
+}

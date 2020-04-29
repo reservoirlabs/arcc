@@ -1,0 +1,14 @@
+{
+  "build": "echo sleep {} > sleep.sh",
+  "run": "bash ./sleep.sh",
+  "clean": "",
+  "args": [
+    {
+      "name": "duration",
+      "format": "{val}",
+      "range": {
+        "continuous": [0.1, 1.0]
+      }
+    }
+  ]
+}
