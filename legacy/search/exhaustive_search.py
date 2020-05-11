@@ -6,11 +6,9 @@
 # $Id$
 #
 
-import search.search_engine
-
 #----------------------------------------------------------
 
-class ExhaustiveSearch(search.search_engine.SearchEngine):
+class ExhaustiveSearch(search_engine.SearchEngine):
     '''The class definition for the exhaustive search algorithm'''
 
     #------------------------------------------------------

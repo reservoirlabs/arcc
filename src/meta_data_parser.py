@@ -12,7 +12,7 @@ import re
 import token
 import tokenize
 
-from . import meta_data_info
+from src import meta_data_info
 
 
 def get_logger():

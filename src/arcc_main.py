@@ -9,30 +9,14 @@ import random
 import re
 import subprocess as sp
 import time
-import sys
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from datetime import datetime
 from typing import List, Optional, Any, Dict, Iterator, Tuple, Union
 
+import src.meta_data_info
+import src.meta_data_parser
 
-def get_arcc_home() -> pathlib.Path:
-    """
-    Get ARCC home (e.g., ~/work/arcc) based on a relative path of this file.
-    """
-    tr = pathlib.Path(__file__).parent.parent.absolute()
-    # just in case this moves around
-    assert tr.exists()
-    assert tr.name == "arcc"
-    return tr
-
-
-# append arcc home to python path, to import other modules
-sys.path.append(str(get_arcc_home()))
-
-# used for parsing the legacy format
-import bin.meta_data_parser
-import bin.meta_data_info
 
 
 def get_logger() -> logging.Logger:
@@ -77,7 +61,7 @@ class Config:
     "consumption".
     """
     def __init__(self, build: str, run: str,
-                 root: "TunableArg", max_trials: Optional[int],
+                 root: "TunableArg", max_iter: Optional[int],
                  output: pathlib.Path, search_strategy: "SearchStrategy"):
         # build command
         self.build = build
@@ -86,7 +70,7 @@ class Config:
         # root of all arguments - uses a tree structure
         self.root = root
         # maximum trials, or none for indefinite
-        self.max_trials = max_trials
+        self.max_iter = max_iter
         # output folder (e.g. arcc-codes/arcc-run-date)
         self.output = output
         # search strategy (random, mutation, etc) class
@@ -96,10 +80,10 @@ class Config:
         """
         Iterate over trials. Either the user-specified number or infinite
         """
-        if self.max_trials is None:
+        if self.max_iter is None:
             return itertools.count(start=0, step=1)
         else:
-            return range(self.max_trials)
+            return range(self.max_iter)
 
 
 class DataRange(ABC):
@@ -264,7 +248,6 @@ class TunableArg:
     automatically tuned.
     """
     def __init__(self, name: str, set_env: Optional[StringFormatter],
-                 set_arg: Optional[StringFormatter],
                  constraint: Optional[StringFormatter],
                  children: List["TunableArg"],
                  data_range: Optional[DataRange]):
@@ -273,8 +256,6 @@ class TunableArg:
         self.name = name
         # how the environment variable should be formatted
         self.set_env = set_env
-        # how the argument should be formatted
-        self.set_arg = set_arg
         # how the constraint should be formatted
         self.constraint = constraint
         # children - empty list for leaf.
@@ -350,7 +331,7 @@ class TunableArg:
 
 
 def convert_classic_meta_data(
-        meta_data: bin.meta_data_info.MetaDataInfo) -> Any:
+        meta_data: src.meta_data_info.MetaDataInfo) -> Any:
     """
     Convert a meta data info parsed using the older code into a new meta data
     format that we know how to consume.
@@ -448,27 +429,28 @@ def production(args: Any) -> Config:
     """
     initialize_logger(args.log_file, args.verbose)
     if args.config_classic:
+        # classic format
         config_file = pathlib.Path(args.config_classic)
         assert config_file.exists(), "can't find classic config file " \
                                      + args.config_classic
         # parse it using the existing parser
-        meta_data = bin.meta_data_parser.parse(config_file)
+        meta_data = src.meta_data_parser.parse(config_file)
         # conversion step
         data = convert_classic_meta_data(meta_data)
     elif args.config:
+        # new format
         config_file = pathlib.Path(args.config)
-        if not config_file.exists():
-            # if it isn't one, search for it in `arcc/configs/{name}.json`
-            config_file = get_arcc_home().joinpath(
-                "configs", args.config + ".json")
-            assert config_file.exists(), f"can't locate config {args.config}"
+        assert config_file.exists(), "can't find config file " \
+                                     + args.config_classic
         # just read the data as-is from the file
         with open(config_file) as f:
             data = json.load(f)
     else:
         # handled by argparse
-        assert False, "unreachable case: no config specified"
+        assert False, "unreachable: no config specified"
     # load each of the stages from the file/command line
+    # NOTE: the "clean" stage is no longer necessary, as each test is ran in a
+    # separate folder.
     stages = []
     for stage in ["build", "run"]:
         file_data = data.get(stage)
@@ -489,9 +471,10 @@ def production(args: Any) -> Config:
                           f"config file or command line args"
     # parse the tunable args from the config file, and add a GLOBAL root arg
     # that contains all of them
-    root = TunableArg("GLOBAL", None, None, None,
-                      list(map(parse_arg, data["args"])), None)
-    # get_logger().debug(f"args: {root}")
+    root = TunableArg("GLOBAL", None, None,
+                      [parse_arg(arg, None) for arg in data["args"]], None)
+
+    # choose and initialize the search strategy class with the tunable arguments
     if args.dummy:
         search_strategy = DummySearch
     elif args.random:
@@ -501,28 +484,61 @@ def production(args: Any) -> Config:
     else:
         get_logger().info("defaulting to random search strategy")
         search_strategy = RandomSearch
-    # initialize the chosen search strategy class with the tunable arguments
     search_strategy = search_strategy(root)
     return Config(stages[0], stages[1], root,
-                  args.max_trials, args.output, search_strategy)
+                  args.max_iter, pathlib.Path(args.output), search_strategy)
 
 
-def parse_arg(datum: Any) -> TunableArg:
-    name = datum["name"]
+def parse_arg(datum: Any, path: Optional[List[str]]) -> TunableArg:
+    """
+    Helper method that parses a tunable argument. See the README for the format.
+    :param datum: Data constructed from primitive data structures.
+    :param path: Path of args to this point. Used for error reporting.
+    """
+    # clone the path to avoid any weird shenanigans
+    if path is not None:
+        path = path.copy()
+
+    # helper to get path as a string, for error reporting.
+    def get_path() -> str:
+        if path is None:
+            return "GLOBAL"
+        else:
+            return '.'.join(path)
+    name = datum.get("name")
+    assert name is not None, "Missing name specifier in child of " + get_path()
+    assert re.fullmatch(r"\w*", name), \
+        f"name must only contain word-like characters: " \
+        f"{name} in child of {get_path()}"
+    if path is None:
+        path = [name]
+    else:
+        path.append(name)
+
+    # check if there are any unexpected keys, and warn if so. Do this first, as
+    # it may be an indicator of an error to come.
+    possible_keys = ["name", "set_env", "constraint", "range", "children"]
+    for key in datum:
+        if key not in possible_keys:
+            get_logger().warning(f"unknown key {key} in {get_path()}")
+
+    # environment variable formatter
     set_env = datum.get("set_env")
     if set_env is not None:
         set_env = StringFormatter(set_env)
-    set_arg = StringFormatter(datum.get("set_arg", "{SELF}"))
+
+    # constraint formatter
     constraint = datum.get("constraint")
     if constraint is not None:
         constraint = StringFormatter(constraint)
+
     # range field should specify what type of range, with necessary data
     range_data = datum.get("range")
     if range_data is not None:
-        assert len(range_data) == 1, "only one range specification allowed"
+        assert len(range_data) == 1, \
+            f"only one range specification allowed in {get_path()}"
         key, value = list(range_data.items())[0]
 
-        # consider moving these raw constructors into the class?
         # continuous float between lower and upper bound
         if key == "continuous":
             assert isinstance(value, list), "expected list"
@@ -542,11 +558,12 @@ def parse_arg(datum: Any) -> TunableArg:
             assert isinstance(value, list), "expected list"
             range_data = DiscreteRange(list(map(str, value)))
         else:
-            assert False, f"unknown key: {key}"
+            assert False, f"unknown range specifier: {key} in {get_path()}"
 
-    children = list(map(parse_arg, datum.get("children", [])))
+    # recursively parse all our children
+    children = [parse_arg(child, path) for child in datum.get("children", [])]
 
-    return TunableArg(name, set_env, set_arg, constraint, children, range_data)
+    return TunableArg(name, set_env, constraint, children, range_data)
 
 
 def consumption(config: Config):
@@ -880,10 +897,7 @@ class MutationSearch(SearchStrategy):
 
 
 def main():
-    args = parse_arsg()
+    args = parse_args()
     config = production(args)
     consumption(config)
 
-
-if __name__ == "__main__":
-    main()

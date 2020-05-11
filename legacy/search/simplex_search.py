@@ -12,11 +12,11 @@
 #
 
 import random
-import search.search_engine
+
 
 #----------------------------------------------------------
 
-class SimplexSearch(search.search_engine.SearchEngine):
+class SimplexSearch(search_engine.SearchEngine):
     '''The class definition for the Nelder-Mead simplex search algorithm.'''
 
     # Simplex-specific coefficients used for determining the next
