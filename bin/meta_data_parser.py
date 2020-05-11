@@ -6,268 +6,273 @@
 # $Id$
 #
 
-import re, io, token, tokenize
+import io
+import logging
+import re
+import token
+import tokenize
+
 from . import meta_data_info
 
-#----------------------------------------------------------
 
-class MetaDataParser:
-    '''The class that defines rules of parsing the meta data file.'''
+def get_logger():
+    return logging.getLogger('arcc')
 
-    # Keywords for the meta data file
-    __OPTION_KWORD = 'option'
-    __VAR_KWORD = 'var'
-    __CONSTRAINT_KWORD = 'constraint'
 
-    #------------------------------------------------------
+# Keywords for the meta data file
+__OPTION_KWORD = 'option'
+__VAR_KWORD = 'var'
+__CONSTRAINT_KWORD = 'constraint'
 
-    def __init__(self, reporter):
-        '''Instantiate a meta data parser'''
 
-        self.__reporter = reporter  # the reporting tool
+def __parsing_error(token_infos, i, msg):
+    """
+    Raise a parsing error
+    """
 
-    #------------------------------------------------------
+    # Get the proper line number
+    if i < 0:
+        line_no = 1
+    elif i < len(token_infos):
+        _, _, (line_no, _), _, _ = token_infos[i]
+    else:
+        _, _, (line_no, _), _, _ = token_infos[len(token_infos)-1]
 
-    def __parsingError(self, token_infos, i, msg):
-        '''Raise a parsing error'''
+    # Raise the parsing error
+    raise Exception('Parsing error on line %s: %s' % (line_no, msg))
 
-        # Get the proper line number
-        if i < 0:
-            line_no = 1
-        elif i < len(token_infos):
-            _, _, (line_no, _), _, _ = token_infos[i]
-        else:
-            _, _, (line_no, _), _, _ = token_infos[len(token_infos)-1]
 
-        # Raise the parsing error
-        raise self.__reporter.error('Parsing error on line %s: %s' % (line_no, msg))
+def __check_token(token_infos, i, token_num, token_val):
+    """
+    Check if the token at the given index position matches with
+    the given token number and token value.
+    """
 
-    #------------------------------------------------------
-
-    def __checkToken(self, token_infos, i, token_num, token_val):
-        '''
-        Check if the token at the given index position matches with
-        the given token number and token value. 
-        '''
-
-        if i < 0 or i >= len(token_infos):
-            return False
-        cur_token_num, cur_token_val, _, _, _ = token_infos[i]
-        if cur_token_num == token_num and (token_val == None or cur_token_val == token_val):
-            return True
+    if i < 0 or i >= len(token_infos):
         return False
+    cur_token_num, cur_token_val, _, _, _ = token_infos[i]
+    if cur_token_num == token_num and (
+            token_val is None or cur_token_val == token_val):
+        return True
+    return False
 
-    #------------------------------------------------------
 
-    def __findToken(self, token_infos, start_i, token_num, token_val):
-        '''
-        Find in the given token info list the index position of the
-        token that matches with the given token number and token
-        value. Returns -1 if there is no match.
-        '''
-
-        i = start_i
-        while i < len(token_infos):
-            if self.__checkToken(token_infos, i, token_num, token_val):
-                return i
-            i += 1
-        return -1
-
-    #------------------------------------------------------
-
-    def __mergeTokenValues(self, token_infos, start_i, end_i):
-        '''
-        Concatenate the values of the tokens from start_i
-        (inclusively) and end_i (exclusively).
-        '''
-
-        s = ''
-        for i, ipos in enumerate(range(start_i, end_i)):
-            _, token_val, _, _, _ = token_infos[ipos]
-            if i > 0:
-                s += ' '
-            s += token_val
-        return s
-
-    #------------------------------------------------------
-
-    def __parseOneGlobalConstraint(self, token_infos, i):
-        '''Parse the given text to extract one global constraint expression.'''
-        
-        # Get the constraint expression
-        if not self.__checkToken(token_infos, i, token.NAME, self.__CONSTRAINT_KWORD):
-            self.__parsingError(token_infos, i, 'a constraint keyword expected')
+def __find_token(token_infos, start_i, token_num, token_val):
+    """
+    Find in the given token info list the index position of the
+    token that matches with the given token number and token
+    value. Returns -1 if there is no match.
+    """
+    i = start_i
+    while i < len(token_infos):
+        if __check_token(token_infos, i, token_num, token_val):
+            return i
         i += 1
-        if not self.__checkToken(token_infos, i, token.OP, '='):
-            self.__parsingError(token_infos, i, 'an equal sign expected')
+    return -1
+
+
+def __merge_token_values(token_infos, start_i, end_i):
+    """
+    Concatenate the values of the tokens from start_i
+    (inclusively) and end_i (exclusively).
+    """
+    s = ''
+    for i, ipos in enumerate(range(start_i, end_i)):
+        _, token_val, _, _, _ = token_infos[ipos]
+        if i > 0:
+            s += ' '
+        s += token_val
+    return s
+
+
+def __parse_one_global_constraint(token_infos, i):
+    """
+    Parse the given text to extract one global constraint expression.
+    """
+
+    # Get the constraint expression
+    if not __check_token(token_infos, i, token.NAME, __CONSTRAINT_KWORD):
+        __parsing_error(token_infos, i, 'a constraint keyword expected')
+    i += 1
+    if not __check_token(token_infos, i, token.OP, '='):
+        __parsing_error(token_infos, i, 'an equal sign expected')
+    i += 1
+    semicolon_i = __find_token(token_infos, i, token.OP, ';')
+    if semicolon_i < 0:
+        __parsing_error(token_infos, len(token_infos) - 1,
+                        'missing a semicolon')
+    global_constraint = __merge_token_values(token_infos, i, semicolon_i)
+    i = semicolon_i + 1
+
+    # Return the next index and the meta data info
+    return i, global_constraint
+
+
+def __parse_one_meta_data_info(token_infos, i):
+    """
+    Parse the given text to extract one meta data info.
+    """
+
+    # Get the meta data ID
+    if not __check_token(token_infos, i, token.NAME, None):
+        __parsing_error(token_infos, i, 'a meta data ID name expected')
+    _, id, (line_no, _), _, _ = token_infos[i]
+    i += 1
+
+    # Check for an opening curly bracket
+    if not __check_token(token_infos, i, token.OP, '{'):
+        __parsing_error(token_infos, i, 'an opening curly bracket expected')
+    i += 1
+
+    # Get the option string
+    if not __check_token(token_infos, i, token.NAME, __OPTION_KWORD):
+        __parsing_error(token_infos, i, 'an option keyword expected')
+    i += 1
+    if not __check_token(token_infos, i, token.OP, '='):
+        __parsing_error(token_infos, i, 'an equal sign expected')
+    i += 1
+    if not __check_token(token_infos, i, token.STRING, None):
+        __parsing_error(token_infos, i, 'a string value expected')
+    _, option, _, _, _ = token_infos[i]
+    i += 1
+    if not __check_token(token_infos, i, token.OP, ';'):
+        __parsing_error(token_infos, i, 'a semicolon expected')
+    i += 1
+
+    # Get the variable names and variable values
+    var_list = []
+    var_vals_list = []
+    while __check_token(token_infos, i, token.NAME, __VAR_KWORD):
         i += 1
-        semicolon_i = self.__findToken(token_infos, i, token.OP, ';')
+        if not __check_token(token_infos, i, token.NAME, None):
+            __parsing_error(token_infos, i, 'a variable name expected')
+        _, vname, _, _, _ = token_infos[i]
+        i += 1
+        if not __check_token(token_infos, i, token.OP, '='):
+            __parsing_error(token_infos, i, 'an equal sign expected')
+        i += 1
+        semicolon_i = __find_token(token_infos, i, token.OP, ';')
         if semicolon_i < 0:
-            self.__parsingError(token_infos, len(token_infos)-1, 'missing a semicolon')
-        global_constraint = self.__mergeTokenValues(token_infos, i, semicolon_i)
+            __parsing_error(token_infos, len(token_infos) - 1,
+                           'missing a semicolon')
+        vval = __merge_token_values(token_infos, i, semicolon_i)
         i = semicolon_i + 1
-        
-        # Return the next index and the meta data info
-        return (i, global_constraint)
-        
-    #------------------------------------------------------
+        var_list.append(vname)
+        var_vals_list.append(vval)
 
-    def __parseOneMetaDataInfo(self, token_infos, i):
-        '''Parse the given text to extract one meta data info.'''
-        
-        # Get the meta data ID
-        if not self.__checkToken(token_infos, i, token.NAME, None):
-            self.__parsingError(token_infos, i, 'a meta data ID name expected')
-        _, ID, (line_no, _), _, _ = token_infos[i]
+    # Get the constraint expression (if exists)
+    constraint = 'True'
+    if __check_token(token_infos, i, token.NAME, __CONSTRAINT_KWORD):
         i += 1
-
-        # Check for an opening curly bracket
-        if not self.__checkToken(token_infos, i, token.OP, '{'):
-            self.__parsingError(token_infos, i, 'an opening curly bracket expected')
+        if not __check_token(token_infos, i, token.OP, '='):
+            __parsing_error(token_infos, i, 'an equal sign expected')
         i += 1
+        semicolon_i = __find_token(token_infos, i, token.OP, ';')
+        if semicolon_i < 0:
+            __parsing_error(token_infos, len(token_infos) - 1,
+                           'missing a semicolon')
+        constraint = __merge_token_values(token_infos, i, semicolon_i)
+        i = semicolon_i + 1
 
-        # Get the option string
-        if not self.__checkToken(token_infos, i, token.NAME, self.__OPTION_KWORD):
-            self.__parsingError(token_infos, i, 'an option keyword expected')
-        i += 1
-        if not self.__checkToken(token_infos, i, token.OP, '='):
-            self.__parsingError(token_infos, i, 'an equal sign expected')
-        i += 1
-        if not self.__checkToken(token_infos, i, token.STRING, None):
-            self.__parsingError(token_infos, i, 'a string value expected')
-        _, option, _, _, _ = token_infos[i]
-        i += 1
-        if not self.__checkToken(token_infos, i, token.OP, ';'):
-            self.__parsingError(token_infos, i, 'a semicolon expected')
-        i += 1
+    # Check for a closing curly bracket
+    if not __check_token(token_infos, i, token.OP, '}'):
+        __parsing_error(token_infos, i, 'a closing curly bracket expected')
+    i += 1
 
-        # Get the variable names and variable values
-        var_list = []
-        var_vals_list = []
-        while self.__checkToken(token_infos, i, token.NAME, self.__VAR_KWORD):
-            i += 1
-            if not self.__checkToken(token_infos, i, token.NAME, None):
-                self.__parsingError(token_infos, i, 'a variable name expected')
-            _, vname, _, _, _ = token_infos[i]
-            i += 1
-            if not self.__checkToken(token_infos, i, token.OP, '='):
-                self.__parsingError(token_infos, i, 'an equal sign expected')
-            i += 1
-            semicolon_i = self.__findToken(token_infos, i, token.OP, ';')
-            if semicolon_i < 0:
-                self.__parsingError(token_infos, len(token_infos)-1, 'missing a semicolon')
-            vval = self.__mergeTokenValues(token_infos, i, semicolon_i)
-            i = semicolon_i + 1
-            var_list.append(vname)
-            var_vals_list.append(vval)
+    # Create the meta data info
+    mdata = meta_data_info.MetaDataInfo(line_no, id, option, var_list,
+                                        var_vals_list, constraint, None)
 
-        # Get the constraint expression (if exists)
-        constraint = 'True'
-        if self.__checkToken(token_infos, i, token.NAME, self.__CONSTRAINT_KWORD):
-            i += 1
-            if not self.__checkToken(token_infos, i, token.OP, '='):
-                self.__parsingError(token_infos, i, 'an equal sign expected')
-            i += 1
-            semicolon_i = self.__findToken(token_infos, i, token.OP, ';')
-            if semicolon_i < 0:
-                self.__parsingError(token_infos, len(token_infos)-1, 'missing a semicolon')
-            constraint = self.__mergeTokenValues(token_infos, i, semicolon_i)
-            i = semicolon_i + 1
+    # Return the next index and the meta data info
+    return i, mdata
 
-        # Check for a closing curly bracket
-        if not self.__checkToken(token_infos, i, token.OP, '}'):
-            self.__parsingError(token_infos, i, 'a closing curly bracket expected')
-        i += 1
-        
-        # Create the meta data info
-        mdata = meta_data_info.MetaDataInfo(self.__reporter, line_no, ID, option, var_list, 
-                                            var_vals_list, constraint, None)
 
-        # Return the next index and the meta data info
-        return (i, mdata)
+def __parse(text):
+    """
+    Parse the given text and extract the meta data information.
+    """
 
-    #------------------------------------------------------
+    # Tokenize the given text using the Python-source tokenizer
+    token_infos = tokenize.generate_tokens(io.StringIO(text).readline)
 
-    def __parse(self, text):
-        '''Parse the given text and extract the meta data information.'''
+    # Remove all whitespace tokens
+    token_infos = [x for x in token_infos
+                   if not (x[1].isspace() or x[0] == token.DEDENT)]
 
-        # Tokenize the given text using the Python-source tokenizer
-        token_infos = tokenize.generate_tokens(io.StringIO(text).readline)
+    # Parse using the generated tokens
+    mdata = None
+    global_constraint = None
+    i = 0
+    while True:
+        # Stop looping if end of file is reached
+        if i == len(token_infos)-1 and \
+                __check_token(token_infos, i, token.ENDMARKER, None):
+            break
 
-        # Remove all whitespace tokens
-        token_infos = [x for x in token_infos if not (x[1].isspace() or x[0] == token.DEDENT)]
-
-        # Parse using the generated tokens
-        mdata = None
-        global_constraint = None
-        i = 0
-        while True:
-
-            # Stop looping if end of file is reached
-            if i == len(token_infos)-1 and self.__checkToken(token_infos, i, token.ENDMARKER, None):
-                break
-
-            # Parse global constraint
-            if self.__checkToken(token_infos, i, token.NAME, self.__CONSTRAINT_KWORD):
-                i, new_global_constraint = self.__parseOneGlobalConstraint(token_infos, i)
-                if global_constraint == None:
-                    global_constraint = new_global_constraint
-                else:
-                    global_constraint = '(%s) and (%s)' % (global_constraint, new_global_constraint)
-
-            # Parse one meta data info
-            elif self.__checkToken(token_infos, i, token.NAME, None):
-                i, new_mdata = self.__parseOneMetaDataInfo(token_infos, i) 
-                if mdata == None:
-                    mdata = new_mdata
-                else:
-                    mdata.add(new_mdata)
-               
-            # Unrecognized next token
+        # Parse global constraint
+        if __check_token(token_infos, i, token.NAME, __CONSTRAINT_KWORD):
+            i, new_global_constraint = \
+                __parse_one_global_constraint(token_infos, i)
+            if global_constraint is None:
+                global_constraint = new_global_constraint
             else:
-                self.__parsingError(token_infos, i, 'unexpected token')
-        
-        # Emit error if no meta data info was extracted
-        if mdata == None:
-            self.__parsingError(token_infos, i, 'meta data file cannot be empty')
+                global_constraint = '(%s) and (%s)' % \
+                                    (global_constraint, new_global_constraint)
 
-        # Merge the global constraint expression into the meta data information
-        if global_constraint != None:
-            mdata.globalConstraint(global_constraint)
+        # Parse one meta data info
+        elif __check_token(token_infos, i, token.NAME, None):
+            i, new_mdata = __parse_one_meta_data_info(token_infos, i)
+            if mdata is None:
+                mdata = new_mdata
+            else:
+                mdata.add(new_mdata)
 
-        # Return the meta data information
-        return mdata
+        elif token_infos[i][0] == token.NEWLINE:
+            """
+            tokenier whitespace works in an interesting way. Even though we 
+            check if the underlying string is whitespace earlier to remove it,
+            the underlying string will be "\n" for newline, and just change its
+            token type. If we're back at a high level parse, just skip over it.
+            """
+            i += 1
 
-    #------------------------------------------------------
+        # Unrecognized next token
+        else:
+            __parsing_error(token_infos, i, 'unexpected token')
 
-    def parse(self, fname):
-        '''Parse the given meta data file to extract meta data information'''
+    # Emit error if no meta data info was extracted
+    if mdata is None:
+        __parsing_error(token_infos, i, 'meta data file cannot be empty')
 
-        # Read the meta data file
-        try: 
-            self.__reporter.logMessage('Reading meta data file: %s' % fname)
-            f = open(fname, 'r')
-            text = f.read()
-            f.close()
-        except Exception as e:
-            raise self.__reporter.error(e)
-        
-        # Replace comments with whitespaces
-        comment_re = '#.*?\n'
-        text = re.sub(comment_re, '\n', text)
+    # Merge the global constraint expression into the meta data information
+    if global_constraint is not None:
+        mdata.globalConstraint(global_constraint)
 
-        # Parse the content of the meta data file
-        self.__reporter.logMessage('Parsing meta data file: %s' % fname)
-        mdata = self.__parse(text)
-        self.__reporter.logMessage('Extracted meta data info: \n%s' % mdata)
-
-        # Check the semantics of the extracted meta data information
-        mdata.semantCheck()
-        
-        # Return the extracted meta data information
-        return mdata
-        
+    # Return the meta data information
+    return mdata
 
 
+def parse(fname) -> meta_data_info.MetaDataInfo:
+    """
+    Parse the given meta data file to extract meta data information
+    """
 
+    # Read the meta data file
+    get_logger().info('Reading meta data file: %s' % fname)
+    with open(fname) as f:
+        text = f.read()
 
+    # Replace comments with whitespaces
+    comment_re = '#.*?\n'
+    text = re.sub(comment_re, '\n', text)
+
+    # Parse the content of the meta data file
+    get_logger().debug('Parsing meta data file: %s' % fname)
+    mdata = __parse(text)
+    get_logger().debug('Extracted meta data info: \n%s' % mdata)
+
+    # Check the semantics of the extracted meta data information
+    mdata.semantCheck()
+
+    # Return the extracted meta data information
+    return mdata

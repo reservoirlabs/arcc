@@ -6,11 +6,33 @@ import logging
 import os
 import pathlib
 import random
+import re
 import subprocess as sp
 import time
+import sys
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from datetime import datetime
-from typing import List, Optional, Any, Dict, Iterator, Tuple
+from typing import List, Optional, Any, Dict, Iterator, Tuple, Union
+
+
+def get_arcc_home() -> pathlib.Path:
+    """
+    Get ARCC home (e.g., ~/work/arcc) based on a relative path of this file.
+    """
+    tr = pathlib.Path(__file__).parent.parent.absolute()
+    # just in case this moves around
+    assert tr.exists()
+    assert tr.name == "arcc"
+    return tr
+
+
+# append arcc home to python path, to import other modules
+sys.path.append(str(get_arcc_home()))
+
+# used for parsing the legacy format
+import bin.meta_data_parser
+import bin.meta_data_info
 
 
 def get_logger() -> logging.Logger:
@@ -20,21 +42,33 @@ def get_logger() -> logging.Logger:
     return logging.getLogger('arcc')
 
 
-def get_arcc_home() -> pathlib.Path:
+def initialize_logger(log_file: Optional[str], verbose: bool):
     """
-    Helper to locate the arcc home directory. Uses environment variable if it
-    exists, otherwise recursively searches for it.
+    Build and return the `arcc` logger. Should only be called once! After
+    called, can also be accessed with logging.getLogger('arcc').
     """
-    # check env variable
-    tfrcc_home = os.environ.get('ARCC_HOME')
-    if tfrcc_home is not None:
-        return pathlib.Path(tfrcc_home)
-    else:
-        # recursively walk back
-        curr = pathlib.Path(__file__).parent.absolute()
-        while curr.name != 'arcc':
-            curr = curr.parent
-        return curr
+    # high level logger - for now, no others are used
+    logger = logging.getLogger('arcc')
+    # custom formatter
+    formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
+    # DEBUG for verbose, otherwise just info
+    log_level = logging.DEBUG if verbose else logging.INFO
+    # log level must be set for both
+    logger.setLevel(log_level)
+
+    # helper to configure a handler
+    def configure_handler(handler):
+        handler.setLevel(log_level)
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+
+    # file handler
+    if log_file is not None:
+        configure_handler(logging.FileHandler(log_file))
+    # stream (stdout) handler
+    configure_handler(logging.StreamHandler())
+    logger.debug("created logger")
+    return logger
 
 
 class Config:
@@ -42,22 +76,20 @@ class Config:
     Configuration class produced during "production", and consumed during
     "consumption".
     """
-    def __init__(self, build: str, run: str, clean: str,
-                 tunable_args: List["TunableArg"], max_trials: Optional[int],
+    def __init__(self, build: str, run: str,
+                 root: "TunableArg", max_trials: Optional[int],
                  output: pathlib.Path, search_strategy: "SearchStrategy"):
         # build command
         self.build = build
         # run command
         self.run = run
-        # clean command
-        self.clean = clean
-        # tunable arguments
-        self.tunable_args = tunable_args
+        # root of all arguments - uses a tree structure
+        self.root = root
         # maximum trials, or none for indefinite
         self.max_trials = max_trials
         # output folder (e.g. arcc-codes/arcc-run-date)
         self.output = output
-        # search strategy (random, mutation, etc)
+        # search strategy (random, mutation, etc) class
         self.search_strategy = search_strategy
 
     def run_iter(self) -> Iterator[int]:
@@ -193,95 +225,209 @@ class DiscreteRange(DataRange):
         return val in self.options
 
 
-class TunableArg:
+class StringFormatter:
     """
-    Class representing an argument that can be tuned
+    Wrapper around a string that's meant to be formatted in the context of an
+    argument. For example, "$VAL < $CHILDA + $CHILDB" when expanded with a node
+    would expand to the string where $VAL is substitued for the value of the
+    current node and $CHILDA and $CHILDB are substituted for the values of the
+    children with the same name, or error if they don't exist.
     """
-    def __init__(self, name: str, formatter: "FormatValue",
-                 data_range: DataRange):
-        # name given to this arg
-        self.name = name
-        # string to format (should contain {key} or {val} where desired)
-        self.formatter = formatter
-        # possible values for this arg
-        self.data_range = data_range
-
-    def __str__(self) -> str:
-        return f"{self.name} ({self.data_range})"
-
-
-def initialize_logger(log_file: Optional[str], verbose: bool):
-    """
-    Build and return the `arcc` logger. Should only be called once! After
-    called, can also be accessed with logging.getLogger('arcc').
-    """
-    # high level logger - for now, no others are used
-    logger = logging.getLogger('arcc')
-    # custom formatter
-    formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
-    # DEBUG for verbose, otherwise just info
-    log_level = logging.DEBUG if verbose else logging.INFO
-    # log level must be set for both
-    logger.setLevel(log_level)
-
-    # helper to configure a handler
-    def configure_handler(handler):
-        handler.setLevel(log_level)
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-
-    # file handler
-    if log_file is not None:
-        configure_handler(logging.FileHandler(log_file))
-    # stream (stdout) handler
-    configure_handler(logging.StreamHandler())
-    logger.debug("created logger")
-    return logger
-
-
-class FormatValue(ABC):
-    """
-    Abstract base class for
-    """
-    pass
-
-
-class Environment(FormatValue):
-    def __init__(self, variable):
-        self.variable = variable
-
-
-class Cmdline(FormatValue):
-    def __init__(self, format_str):
+    def __init__(self, format_str: str):
         self.format_str = format_str
 
-    def format_with(self, val: Any) -> str:
-        return self.format_str.format(val=val)
+    def expand(self, assignment: Union[Any, "Assignment"]) -> str:
+        def find_replacement(match) -> str:
+            """
+            regex sub requires a function that takes in a match and returns
+            a replacement string for it. Get the match inside the {} and
+            look up inside the assignment the actual value
+            """
+            var = match.group(1)
+            path = var.split('.')
+            # SELF is a special case - we should be a value already
+            if var == "SELF":
+                assert not isinstance(assignment, Assignment)
+                val = assignment
+            else:
+                # otherwise, lookup the path, and make sure it's a value
+                assert isinstance(assignment, Assignment)
+                val = assignment.lookup(path)
+                assert not isinstance(val, Assignment)
+            return str(val)
+        return re.sub(r"{(\w+)}", find_replacement, self.format_str)
 
 
-def get_config() -> Config:
+class TunableArg:
+    """
+    Class representing an argument or group of arguments that can be
+    automatically tuned.
+    """
+    def __init__(self, name: str, set_env: Optional[StringFormatter],
+                 set_arg: Optional[StringFormatter],
+                 constraint: Optional[StringFormatter],
+                 children: List["TunableArg"],
+                 data_range: Optional[DataRange]):
+        # name given to this arg. used for setting command-line/environment.
+        # NOTE: the "full name" will be ...GRANDPARENT_NAME.PARENT_NAME.MY_NAME
+        self.name = name
+        # how the environment variable should be formatted
+        self.set_env = set_env
+        # how the argument should be formatted
+        self.set_arg = set_arg
+        # how the constraint should be formatted
+        self.constraint = constraint
+        # children - empty list for leaf.
+        # maps child name to child object
+        self.children = {child.name: child for child in children}
+        # possible values for this arg. non-None in leaf.
+        self.data_range = data_range
+
+    def get_arbitrary_assignment(self) -> Union["Assignment", Any]:
+        # recursively build an arbitrary assignment
+        # if we don't have a data range, build recursively from children
+        if self.data_range is None:
+            return Assignment({name: child.get_arbitrary_assignment()
+                               for name, child in self.children.items()})
+        # otherwise, just return an arbitrary value
+        else:
+            return self.data_range.get_arbitrary()
+
+    def lookup(self, path: List[str]) -> "TunableArg":
+        # lookup a relative path for this arg
+        if len(path) == 0:
+            return self
+        else:
+            return self.children[path[0]].lookup(path[1:])
+
+    def build_env(self, path: Optional[List[str]],
+                  assignment: Union[Any, "Assignment"]) -> Dict[str, str]:
+        """
+        Build an environment
+        :param path: relative path to get to this arg
+        :param assignment: remaining assignment starting at this arg
+        """
+        tr = {}
+        # root case - there's ambiguity because for a child one below the root
+        # or at the root would both be the empty list. So, the path to the root
+        # is represented by None and handled specially.
+        if path is None:
+            assert self.name == "GLOBAL"
+            assert self.set_env is None
+            new_path = []
+        else:
+            new_path = path + [self.name]
+            # NOTE: normally, we'd use periods as a separator. However,
+            # environment variables don't support periods in their name, so use
+            # underscores instead. This shouldn't cause an issue, because even
+            # though we are creating ambiguity, we don't need to go in the
+            # reverse direction. I'm not sure how this is parsed on the
+            # R-Stream side of things.
+            if self.set_env:
+                tr['_'.join(new_path)] = self.set_env.expand(assignment)
+        # build the remainder path recursively
+        for child_name, child in self.children.items():
+            tr.update(child.build_env(
+                new_path, assignment.lookup([child_name])))
+        return tr
+
+    def is_valid_assignment(self, assignment: Union[Any, "Assignment"]) -> bool:
+        """
+        Check if an assignment recursively satisfies all constraints.
+        """
+        # if we have a constraint, expand, evaluate, and interpret as a bool
+        if self.constraint is not None:
+            expanded = self.constraint.expand(assignment)
+            res = eval(expanded)
+            assert isinstance(res, bool)
+            if not res:
+                return False
+        # check all our child constraints recursively
+        for child_name, child in self.children.items():
+            if not child.is_valid_assignment(assignment.lookup([child_name])):
+                return False
+        return True
+
+
+def convert_classic_meta_data(
+        meta_data: bin.meta_data_info.MetaDataInfo) -> Any:
+    """
+    Convert a meta data info parsed using the older code into a new meta data
+    format that we know how to consume.
+
+    Has a fixed two-layer structure - a list of high level name (usually
+    corresponding to the function + tactic), then a list of variables inside
+    that corresponding to the possible ways to tune.
+    """
+    args = []
+    # returned in a singly linked list structure
+    while meta_data is not None:
+        children = []
+        # add all the children variables
+        for var, options in zip(meta_data.var_list, meta_data.var_vals_list):
+            children.append({
+                "name": var,
+                "range": {
+                    "discrete": options
+                }
+            })
+
+        # the existing format wraps with dollar signs (`$VAR$`), and the new
+        # format wraps in brackets (`{VAR}`), so use regex to replace
+        def convert_old_to_new(old: str) -> str:
+            # match any word-like string inside of dollar signs.
+            # this will greedy (avoid matching `$VAR1$ $VAR2$`), as desired.
+            return re.sub(r"\$(\w+)\$", lambda m: f"{{{m.group(1)}}}", old)
+        group_data = {
+            "name": meta_data.ID,
+            "set_env": convert_old_to_new(meta_data.option),
+            "constraint": convert_old_to_new(meta_data.constraint),
+            "children": children,
+        }
+        args.append(group_data)
+        meta_data = meta_data.next
+    return {"args": args}
+
+
+def parse_args() -> Any:
+    """
+    Parse args and return the result.
+    """
     parser = argparse.ArgumentParser(
         description='ARCC is an automated tuning tool designed to tune '
                     'compiler flags for optimal performance.')
-    parser.add_argument("--config", required=True,
+    # config group - either the legacy or the new format
+    config = parser.add_mutually_exclusive_group(required=True)
+    config.add_argument("--config-classic",
+                        help="config with the previous format, as generated by "
+                             "R-Stream. See README for more info.")
+    config.add_argument("--config",
                         help="configuration file with tunable args, and "
-                             "optionally build/run/clean commands.")
+                             "optionally build/run commands. See README "
+                             "for more info.")
+    # build and run command
     parser.add_argument('--build',
-                        help="build command. `{}` is used to denote optional "
-                             "arguments, otherwise will be placed at the end.")
+                        help="build command. use {VAR_NAME} to indicate where "
+                             "variables should be placed in the command.")
     parser.add_argument('--run',
                         help="run command. will be run after building and "
-                             "timed.")
-    parser.add_argument('--clean', help="clean command. ran after running")
+                             "timed. this is the main command to test")
+    # logging stuff
     parser.add_argument('--verbose', help="enable verbose logging",
                         action='store_true')
     parser.add_argument('--log-file', help="log file location",
+                        # with just --log-file, stored in log.txt
                         action='store_const', const="log.txt")
-    parser.add_argument('--max-trials', '-n', type=int, help="number of trials")
+    # iterations
+    parser.add_argument('--max-iter', '-n', type=int,
+                        help="max number of iterations in the search "
+                             "(infinite by default)")
+    # output file
     parser.add_argument('--output', help="output location",
-                        default=get_arcc_home()
-                        .joinpath("arcc-codes", f"arcc-run-{datetime.now()}"))
+                        default=str(pathlib.Path.cwd().joinpath(
+                            "arcc-codes", f"arcc-run-{datetime.now()}")))
 
+    # exclusive group of search strategies
     strategy_group = parser.add_mutually_exclusive_group()
     strategy_group.add_argument("--dummy", action="store_true",
                                 help="dummy strategy that executes once with "
@@ -293,40 +439,59 @@ def get_config() -> Config:
                                 help="strategy that repeatedly mutates the "
                                      "best known assignment until satisfied")
 
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+def production(args: Any) -> Config:
+    """
+    Production - convert parsed arguments to a config that can be executed.
+    """
     initialize_logger(args.log_file, args.verbose)
-    # try to load the config as a file directly
-    if os.path.isfile(args.config):
+    if args.config_classic:
+        config_file = pathlib.Path(args.config_classic)
+        assert config_file.exists(), "can't find classic config file " \
+                                     + args.config_classic
+        # parse it using the existing parser
+        meta_data = bin.meta_data_parser.parse(config_file)
+        # conversion step
+        data = convert_classic_meta_data(meta_data)
+    elif args.config:
         config_file = pathlib.Path(args.config)
+        if not config_file.exists():
+            # if it isn't one, search for it in `arcc/configs/{name}.json`
+            config_file = get_arcc_home().joinpath(
+                "configs", args.config + ".json")
+            assert config_file.exists(), f"can't locate config {args.config}"
+        # just read the data as-is from the file
+        with open(config_file) as f:
+            data = json.load(f)
     else:
-        # if it isn't one, search for it in `arcc/configs/{name}.json`
-        config_file = get_arcc_home().joinpath("configs", args.config + ".json")
-        assert config_file.exists(), f"can't locate config {args.config}"
-    with open(str(config_file)) as f:
-        get_logger().info(f"loading config from {f.name}")
-        data = json.load(f)
-
+        # handled by argparse
+        assert False, "unreachable case: no config specified"
     # load each of the stages from the file/command line
     stages = []
-    for stage in ["build", "run", "clean"]:
+    for stage in ["build", "run"]:
         file_data = data.get(stage)
         cmd_data = getattr(args, stage)
-        if file_data is not None:
-            stages.append(file_data)
-            # if it exists in the file, warn if it's also specified in args
-            if cmd_data is not None:
-                get_logger().warning(f"{stage} specified in both config file "
-                                     f"and command line args. using value in "
-                                     f"config file")
-        else:
-            assert cmd_data is not None, f"{stage} not specified in either " \
-                                         f"config file or command line args"
+        # by default, use the cmd line argument
+        if cmd_data is not None and file_data is not None:
             stages.append(cmd_data)
-
-    # parse the tunable args from the config file
-    tunable_args = production(data["args"])
-    get_logger().debug(f"tunable args: {list(map(str, tunable_args))}")
+            # warn since specified in both
+            get_logger().warning(f"{stage} specified in both config file "
+                                 f"and command line args. using value in "
+                                 f"command file")
+        elif cmd_data is not None:
+            stages.append(cmd_data)
+        elif file_data is not None:
+            stages.append(file_data)
+        else:
+            assert False, f"{stage} not specified in either " \
+                          f"config file or command line args"
+    # parse the tunable args from the config file, and add a GLOBAL root arg
+    # that contains all of them
+    root = TunableArg("GLOBAL", None, None, None,
+                      list(map(parse_arg, data["args"])), None)
+    # get_logger().debug(f"args: {root}")
     if args.dummy:
         search_strategy = DummySearch
     elif args.random:
@@ -337,22 +502,23 @@ def get_config() -> Config:
         get_logger().info("defaulting to random search strategy")
         search_strategy = RandomSearch
     # initialize the chosen search strategy class with the tunable arguments
-    search_strategy = search_strategy(tunable_args)
-    return Config(stages[0], stages[1], stages[2], tunable_args,
+    search_strategy = search_strategy(root)
+    return Config(stages[0], stages[1], root,
                   args.max_trials, args.output, search_strategy)
 
 
-def production(data: List[Dict[str, Any]]) -> List[TunableArg]:
-    """
-    Generate the meta data for use in auto-tuning. This describes what arguments
-    can be tuned and how. This could also be done by querying R-Stream (or
-    whatever is being auto-tuned) dynamically; however, this isn't currently
-    supported.
-    """
-    tr = []
-    for datum in data:
-        # range field should specify what type of range, with necessary data
-        range_data = datum["range"]
+def parse_arg(datum: Any) -> TunableArg:
+    name = datum["name"]
+    set_env = datum.get("set_env")
+    if set_env is not None:
+        set_env = StringFormatter(set_env)
+    set_arg = StringFormatter(datum.get("set_arg", "{SELF}"))
+    constraint = datum.get("constraint")
+    if constraint is not None:
+        constraint = StringFormatter(constraint)
+    # range field should specify what type of range, with necessary data
+    range_data = datum.get("range")
+    if range_data is not None:
         assert len(range_data) == 1, "only one range specification allowed"
         key, value = list(range_data.items())[0]
 
@@ -378,24 +544,9 @@ def production(data: List[Dict[str, Any]]) -> List[TunableArg]:
         else:
             assert False, f"unknown key: {key}"
 
-        # name, formatter
-        name = datum['name']
-        assert isinstance(name, str)
-        format_data = datum['format']
-        assert isinstance(format_data, dict)
-        assert len(format_data) == 1
-        format_type, format_data = list(format_data.items())[0]
-        assert isinstance(format_type, str)
-        if format_type == 'cmd_line':
-            assert isinstance(format_data, str)
-            formatter = Cmdline(format_data)
-        elif format_type == 'environment':
-            assert isinstance(format_data, str)
-            formatter = Environment(format_data)
-        else:
-            assert False, "unknown format type: " + format_type
-        tr.append(TunableArg(name, formatter, range_data))
-    return tr
+    children = list(map(parse_arg, datum.get("children", [])))
+
+    return TunableArg(name, set_env, set_arg, constraint, children, range_data)
 
 
 def consumption(config: Config):
@@ -403,6 +554,7 @@ def consumption(config: Config):
     The core logic. Consumes the config, optimizing arguments to maximize
     performance. Currently, only has one walk strategy -
     """
+    get_logger().info(f"starting search, output in {config.output}")
     # make the high level output folder
     config.output.mkdir(parents=True)
 
@@ -412,6 +564,9 @@ def consumption(config: Config):
         # the strategy finished early, exit
         if assignment is None:
             break
+        # invalid assignment, continue
+        if not config.root.is_valid_assignment(assignment):
+            continue
         # create the new directory to run the test in
         out_dir = config.output.joinpath(f"run-{run_id}")
         out_dir.mkdir()
@@ -424,34 +579,18 @@ def consumption(config: Config):
             get_logger().info(f"run {run_id} with assignment "
                               f"{assignment}")
             print(str(assignment), file=out_file)
-            for stage in ["build", "run", "clean"]:
+            for stage in ["build", "run"]:
                 cmd = getattr(config, stage)
                 run_env = os.environ.copy()
                 if stage == "build":
-                    # in build mode, update our command/environment based on the
-                    # assignment. environment variables should be updated and
-                    # the build command should be run
-                    extra_args = ""
-                    for formatter, val in assignment.format_value_pairs():
-                        # command line formatter, add to command line
-                        if isinstance(formatter, Cmdline):
-                            extra_args += formatter.format_with(val) + " "
-                        # environment formatter, update command line
-                        elif isinstance(formatter, Environment):
-                            run_env[formatter.variable] = val
-                        else:
-                            assert False, f"unexpected formatter: {formatter}"
-
-                    extra_args = extra_args.strip()
-                    if "{}" in cmd:
-                        # if the command has {}, place them there
-                        cmd = cmd.replace("{}", extra_args)
-                    else:
-                        # otherwise, just place them at the end
-                        cmd = f"{cmd} {extra_args}"
+                    # update the command and environment using the assignment
+                    cmd = StringFormatter(cmd).expand(assignment)
+                    new_env = config.root.build_env(None, assignment)
+                    run_env = run_env.update(new_env)
                 # run the stage command, and handle any errors appropriately
-                get_logger().debug(f"running {stage} stage with {cmd}")
-                print(f"{out_dir}: {cmd}", file=out_file)
+                get_logger().debug(f"running {stage} stage with cmd `{cmd}` "
+                                   f"and env `{new_env}`")
+                print(f"{out_dir}: {cmd}, env={new_env}", file=out_file)
                 start = time.time()
                 proc = sp.run(cmd, shell=True, cwd=str(out_dir),
                               stdout=sp.PIPE, stderr=sp.STDOUT,
@@ -460,7 +599,7 @@ def consumption(config: Config):
                 if stage == "run":
                     runtime = end - start
                     print(f"executed in {runtime}", file=out_file)
-                print(proc.stdout, file=out_file)
+                print(proc.stdout.strip(), file=out_file)
                 # failing any stage isn't a hard error, so just log as such
                 if proc.returncode != 0:
                     error_str = f"failed to run {stage} with code " \
@@ -470,8 +609,6 @@ def consumption(config: Config):
                     error_occurred = True
                     break
             # only record the runtime and notify results if no error occurred.
-            # technically, we're still probably safe to do it if cleanup fails,
-            # but that's unlikely
             if not error_occurred:
                 get_logger().info(f"successfully ran in {runtime}s")
                 config.search_strategy.notify_results(assignment, runtime)
@@ -490,38 +627,72 @@ def consumption(config: Config):
 class Assignment:
     """
     Represents an assignment of values to tunable arguments. Helpful to avoid
-    hashing oddities and easy pretty printing.
+    hashing oddities and easy pretty printing. Maps the child arg to the
+    assignment for that child, or the actual value if that child is a leaf.
     """
-    def __init__(self, items: Dict[TunableArg, Any]):
-        """
-        Python doesn't have a `frozendict`, so model with a frozenset instead.
-        """
-        self.items = frozenset(items.items())
+    def __init__(self, items: Dict[str, Union["Assignment", Any]]):
+        self.items = items
 
-    def dict(self) -> Dict[TunableArg, Any]:
+    @classmethod
+    def from_path_assignments(cls, paths: List[Tuple[List[str], Any]]) \
+            -> "Assignment":
+        items = {}
+        raw = defaultdict(lambda: list())
+        for path, val in paths:
+            assert len(path) > 0
+            if len(path) == 1:
+                items[path[0]] = val
+            else:
+                raw[path[0]].append((path[1:], val))
+        for path0, remaining in raw.items():
+            items[path0] = Assignment.from_path_assignments(remaining)
+        return Assignment(items)
+
+    def lookup(self, path: List[str]) -> Union["Assignment", Any]:
+        """
+        Lookup the assignment or value for a path.
+        """
+        assert len(path) > 0
+        if len(path) == 1:
+            return self.items[path[0]]
+        else:
+            return self.items[path[0]].lookup(path[1:])
+
+    def dict(self) -> Dict[str, Union["Assignment", Any]]:
         """
         Build and return a dict the user can use.
         """
         return {key: val for key, val in self.items}
 
-    def format_value_pairs(self) -> List[Tuple[FormatValue, Any]]:
+    def immutable(self):
         """
-        Return the pairs of format values and values
+        Python doesn't have a `frozendict`, so model with a frozenset instead.
         """
-        return [(key.formatter, val) for key, val in self.items]
+        return frozenset(self.items.items())
+
+    def as_json(self) -> Any:
+        return {key: value.as_json() if isinstance(value, Assignment) else value
+                for key, value in self.items.items()}
+
+    def path_assignments(self) -> List[Tuple[List[str], Any]]:
+        tr = []
+        for child, val in self.items.items():
+            if isinstance(val, Assignment):
+                tr += [([child] + path, val)
+                       for path, val in val.path_assignments()]
+            else:
+                tr += [([child], val)]
+        return tr
 
     def __str__(self) -> str:
-        """
-        Print the assignments in a human-readable format.
-        """
-        return str([f"{key.name} -> {val}" for key, val in self.items])
+        return json.dumps(self.as_json())
 
-    # forward hash/eq to the frozenset
+    # forward hash/eq to the immutable representation
     def __hash__(self):
-        return hash(self.items)
+        return hash(self.immutable())
 
     def __eq__(self, other):
-        return self.items == other.items
+        return self.immutable() == other.immutable()
 
 
 class SearchStrategy(ABC):
@@ -530,7 +701,7 @@ class SearchStrategy(ABC):
     """
 
     @abstractmethod
-    def __init__(self, tunable_args: List[TunableArg]):
+    def __init__(self, root: TunableArg):
         """
         Must be able to initialize with just the tunable arguments.
         """
@@ -566,9 +737,9 @@ class DummySearch(SearchStrategy):
     for testing/debug.
     """
 
-    def __init__(self, tunable_args: List[TunableArg]):
-        super().__init__(tunable_args)
-        self.tunable_args = tunable_args
+    def __init__(self, root: TunableArg):
+        super().__init__(root)
+        self.root = root
         self.has_returned = False
 
     def get_assignment(self) -> Optional[Assignment]:
@@ -579,8 +750,7 @@ class DummySearch(SearchStrategy):
             return None
         else:
             self.has_returned = True
-            return Assignment({arg: arg.data_range.get_arbitrary()
-                               for arg in self.tunable_args})
+            return self.root.get_arbitrary_assignment()
 
     def notify_results(self, assignment: Assignment, runtime: float):
         # don't do anything, since we're dummy
@@ -596,9 +766,9 @@ class RandomSearch(SearchStrategy):
     Simple strategy based on randomly searching the search space and returning
     the best result.
     """
-    def __init__(self, tunable_args: List[TunableArg]):
-        super().__init__(tunable_args)
-        self.tunable_args = tunable_args
+    def __init__(self, root: TunableArg):
+        super().__init__(root)
+        self.root = root
         self.best_observed = None
         self.best_time = None
 
@@ -606,8 +776,7 @@ class RandomSearch(SearchStrategy):
         """
         Return an arbitrary assignment for each input
         """
-        return Assignment({arg: arg.data_range.get_arbitrary()
-                           for arg in self.tunable_args})
+        return self.root.get_arbitrary_assignment()
 
     def notify_results(self, assignment: Assignment, runtime: float):
         """
@@ -633,16 +802,15 @@ class MutationSearch(SearchStrategy):
     mutate to better times until multiple failed mutations in a row. When this
     occurs, restart the process.
     """
-    def __init__(self, tunable_args: List[TunableArg]):
-        super().__init__(tunable_args)
+    def __init__(self, root: TunableArg):
+        super().__init__(root)
         # current number of failed mutations/restarts
         self.failed_mutations = 0
         self.restarts = 0
         # time and assignment of the current "head"
         self.curr_time = None
         self.curr_assignment: Optional[Assignment] = None
-        # all tunable args
-        self.tunable_args = tunable_args
+        self.root = root
         # all tried assignments - this will have the global bests
         self.tried_assignments: Dict[Assignment, float] = {}
 
@@ -658,19 +826,18 @@ class MutationSearch(SearchStrategy):
             # once we've restarted enough times, give up
             if self.restarts >= 4:
                 return None
-            return Assignment({arg: arg.data_range.get_arbitrary()
-                               for arg in self.tunable_args})
+            return self.root.get_arbitrary_assignment()
         else:
-            mutated = list(self.curr_assignment.dict().items())
+            mutated = self.curr_assignment.path_assignments()
             # only if there's anything to mutate
-            if len(mutated) > 0:
-                # choose a random argument to mutate, and mutate it
-                to_mutate = random.randint(0, len(mutated) - 1)
-                key, old_val = mutated[to_mutate]
-                new_val = key.data_range.mutate_value(old_val)
-                mutated[to_mutate] = key, new_val
+            assert len(mutated) > 0
+            # choose a random argument to mutate, and mutate it
+            to_mutate = random.randint(0, len(mutated) - 1)
+            key, old_val = mutated[to_mutate]
+            new_val = self.root.lookup(key).data_range.mutate_value(old_val)
+            mutated[to_mutate] = key, new_val
             # build and return the mutated assignment
-            mutated = Assignment({key: val for key, val in mutated})
+            mutated = Assignment.from_path_assignments(mutated)
             return mutated
 
     def notify_results(self, assignment: Assignment, runtime: float):
@@ -713,7 +880,8 @@ class MutationSearch(SearchStrategy):
 
 
 def main():
-    config = get_config()
+    args = parse_arsg()
+    config = production(args)
     consumption(config)
 
 

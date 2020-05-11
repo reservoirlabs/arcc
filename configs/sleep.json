@@ -1,24 +1,14 @@
 {
-  "build": "echo sleep {} > sleep.sh",
+  "build": "echo sleep {sleep_duration} > sleep.sh",
   "run": "bash ./sleep.sh",
   "clean": "",
   "args": [
     {
-      "name": "duration",
-      "format": {
-        "cmd_line": "{val}"
-      },
+      "name": "sleep_duration",
+      "set_env": "{SELF}",
+      "constraint": "{SELF} * {SELF} > .09",
       "range": {
         "continuous": [0.0, 0.5]
-      }
-    },
-    {
-      "name": "env",
-      "format": {
-        "environment": "SOME_ENV"
-      },
-      "range": {
-        "discrete": ["val1", "val2", "val3"]
       }
     }
   ]

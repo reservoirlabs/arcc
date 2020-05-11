@@ -1,0 +1,31 @@
+{
+  "args": [
+    {
+      "argument_group": {
+        "name": "UJ_SMP_MATMULT",
+        "set_env": "max_unroll={UJ_SMP_MATMULT_A},max_unroll_per_dimension={UJ_SMP_MATMULT_B},innermost={UJ_SMP_MATMULT_C}",
+        "constraint": "( {UJ_SMP_MATMULT2_A} >= {UJ_SMP_MATMULT2_B} )",
+        "children": [
+          {
+            "name": "UJ_SMP_MATMULT_A",
+            "range": {
+              "discrete": ["1", "8", "64", "256"]
+            }
+          },
+          {
+            "name": "UJ_SMP_MATMULT_B",
+            "range": {
+              "discrete": ["1", "4", "8", "16"]
+            }
+          },
+          {
+            "name": "UJ_SMP_MATMULT_C",
+            "range": {
+              "discrete": ["true", "false"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
