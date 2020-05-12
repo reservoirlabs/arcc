@@ -3,6 +3,7 @@
     {
       "argument_group": {
         "name": "UJ_SMP_MATMULT",
+        "env_key": "ARCC_OPTION_{name}",
         "set_env": "max_unroll={UJ_SMP_MATMULT_A},max_unroll_per_dimension={UJ_SMP_MATMULT_B},innermost={UJ_SMP_MATMULT_C}",
         "constraint": "( {UJ_SMP_MATMULT2_A} >= {UJ_SMP_MATMULT2_B} )",
         "children": [
