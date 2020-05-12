@@ -34,7 +34,6 @@ def consumption(config: Config):
         # create the new directory
         fresh_dir = config.output.joinpath(f"run-{run_id}")
         fresh_dir.mkdir()
-
         # write extra info to log.txt as we run
         with open(str(fresh_dir.joinpath("log.txt")), "x") as out_file:
             # store the runtime and whether an error occurred
@@ -53,6 +52,11 @@ def consumption(config: Config):
 
                 run_env = os.environ.copy()
                 run_env.update(new_env)
+                # Some magic flags that R-Stream uses
+                run_env.update({
+                    "ARCC_MODE": "consume",
+                    "ARCC_PERF": "rough",
+                })
                 # run the stage command, and handle any errors appropriately
                 get_logger().debug(f"running stage `{stage}` with cmd `{cmd}`")
                 if len(new_env) > 0:

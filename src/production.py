@@ -1,7 +1,9 @@
 import itertools
 import json
+import os
 import pathlib
 import re
+import tempfile
 from typing import List, Optional, Any, Dict, Iterator, Union
 
 import src.meta_data_info
@@ -11,7 +13,7 @@ from src.assignment import Assignment
 from src.data_range import DataRange, ContinuousRange, DiscreteRange, \
     IntegralRange
 from src.search import MutationSearch, SearchStrategy, RandomSearch, DummySearch
-
+import subprocess as sp
 
 class StringFormatter:
     """
@@ -192,6 +194,72 @@ def production(args: Any) -> Config:
     """
     Production - convert parsed arguments to a config that can be executed.
     """
+    arcc_tmp_dir = None
+
+    """
+    Helper function to lazily create a temporary directory only when necessary.
+    """
+    def temp_dir():
+        nonlocal arcc_tmp_dir
+        if arcc_tmp_dir is None:
+            arcc_tmp_dir = tempfile.mkdtemp(prefix='arcc-',)
+            return arcc_tmp_dir
+        else:
+            return arcc_tmp_dir
+
+    if args.config_classic is None and args.config is None:
+        """
+        This is a bit of a sore spot. Production and consumption are very 
+        different operations, but R-Stream kinda wants to do both with the same
+        workflow. The idea is to "run without an assignment" to generate a 
+        configuration, but that really isn't possible with most commands. For 
+        example, how should `cmd --opt1 {opt1} --opt2 {opt2}` be run in 
+        production mode? One idea would be to set some magic flags that tells
+        `cmd` to run in production mode, but then what should be substituted in
+        that command line argument?
+        
+        Unfortunately, I think the most reasonable solution would be to require
+        the user to generate this config, but that would break existing ARCC
+        workflow. It might be worth moving this logic out to another command in
+        bin/ that is an R-Stream specific way of generating this config to 
+        separate out the R-Stream specific logic, but leaving it here for now.
+        """
+        get_logger().info("no config specified; generating one.\n"
+                          "this is mostly meant as backward compatibility with "
+                          "R-Stream, it is recommended to generate one before "
+                          "calling arcc and to pass it in.")
+        meta_file = None
+        # no need tor run, since just bulding configuration
+        for stage in ["clean", "build"]:
+            cmd_data = getattr(args, stage)
+            assert cmd_data is not None, f"must specify command for `{stage}`"
+            run_env = os.environ.copy()
+            if stage == "build":
+                # add some magic environment variables
+                meta_file = os.path.join(temp_dir(), "arcc.meta")
+                run_env.update({
+                    "ARCC_METADATA": meta_file,
+                    "ARCC_OPTIONUSEMODE": "default",
+                    "ARCC_MODE": "produce",
+                })
+            # run, handle errors
+            proc = sp.run(cmd_data, shell=True, env=run_env,
+                          stdout=sp.PIPE, stderr=sp.STDOUT,
+                          encoding='utf-8')
+            if proc.returncode != 0:
+                get_logger().info(f"stage `{stage}` failed with exit code "
+                                  f"{proc.returncode}:\n{proc.stdout}")
+                assert False, "failed to generate configuration"
+            if stage == "build":
+                if not os.path.exists(meta_file):
+                    get_logger().info(f"build returned zero exit code, but "
+                                      f"failed to generate {meta_file}:\n"
+                                      f"{proc.stdout}")
+                    assert False, "failed to generate configuration"
+                get_logger().info(f"generated config file {meta_file}")
+                # set the classic config, and flow through the rest of the logic
+                args.config_classic = meta_file
+
     if args.config_classic:
         # classic format
         config_file = pathlib.Path(args.config_classic)
@@ -201,8 +269,9 @@ def production(args: Any) -> Config:
         meta_data = src.meta_data_parser.parse(config_file)
         # conversion step
         data = convert_classic_meta_data(meta_data)
-        # TODO: remove this?
-        with open('arcc-new.json', 'w') as f:
+        arcc_new_file = os.path.join(temp_dir(), "arcc-new.json")
+        get_logger().info(f"placing converted file in {arcc_new_file}")
+        with open(arcc_new_file, 'w') as f:
             json.dump(data, f, indent=2)
     elif args.config:
         # new format
@@ -213,7 +282,6 @@ def production(args: Any) -> Config:
         with open(config_file) as f:
             data = json.load(f)
     else:
-        # handled by argparse
         assert False, "unreachable: no config specified"
     # load each of the stages from the file/command line
     # NOTE: the "clean" stage is no longer necessary, as each test is ran in a
@@ -249,8 +317,8 @@ def production(args: Any) -> Config:
     elif args.mutation:
         search_strategy = MutationSearch
     else:
-        get_logger().info("defaulting to random search strategy")
-        search_strategy = RandomSearch
+        get_logger().info("defaulting to mutation search strategy")
+        search_strategy = MutationSearch
     if args.preserve is None:
         args.preserve = []
     args.preserve = [pathlib.Path(file) for file in args.preserve]
