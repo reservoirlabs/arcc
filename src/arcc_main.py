@@ -670,6 +670,8 @@ def consumption(config: Config):
                 else:
                     new_env = {}
 
+                run_env = os.environ.copy()
+                run_env.update(new_env)
                 # run the stage command, and handle any errors appropriately
                 get_logger().debug(f"running stage `{stage}` with cmd `{cmd}`")
                 if len(new_env) > 0:
@@ -679,7 +681,7 @@ def consumption(config: Config):
                 start = time.time()
                 proc = sp.run(cmd, shell=True, cwd=str(run_dir),
                               stdout=sp.PIPE, stderr=sp.STDOUT,
-                              encoding='utf-8', env=os.environ.copy().update(new_env))
+                              encoding='utf-8', env=run_env)
                 end = time.time()
                 if stage == "run":
                     runtime = end - start
