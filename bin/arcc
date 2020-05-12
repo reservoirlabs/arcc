@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import os
 import pathlib
 import sys
 
@@ -20,15 +19,9 @@ def get_arcc_home() -> pathlib.Path:
 
 
 if __name__ == "__main__":
-    arcc_home = str(get_arcc_home())
     # append arcc home to python path, to import other modules.
-    # this also means other modules don't need to bother with this
-    sys.path.append(arcc_home)
-    # also add is as an environment variable, so it's easily retrieved in other
-    # modules, and will be visible in any spawned processes for the user. this
-    # means if the user needs some ARCC hackery (e.g., hard coded paths), it's
-    # visible for them
-    os.environ["ARCC_HOME"] = arcc_home
+    # this also means other modules don't need to bother with this.
+    sys.path.append(str(get_arcc_home()))
     # only import after appending path
     import src.arcc_main
     # forward the main call

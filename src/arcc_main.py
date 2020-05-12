@@ -104,7 +104,7 @@ class DataRange(ABC):
         pass
 
     @abstractmethod
-    def mutate_value(self, value: Any) -> Any:
+    def mutate_value(self, value: Any, granularity: int) -> Any:
         """
         Perform a small mutation on a value and return the new value.
         """
@@ -133,12 +133,12 @@ class ContinuousRange(DataRange):
     def get_arbitrary(self) -> Any:
         return random.uniform(self.lb, self.ub)
 
-    def mutate_value(self, value: Any) -> Any:
+    def mutate_value(self, value: Any, granularity: int) -> Any:
         """
         To mutate, get a new limited range centered at the current location,
         and get a uniform value up or down from that.
         """
-        mutation_range = (self.ub - self.lb) / 8
+        mutation_range = (self.ub - self.lb) / granularity
         new_lb = value - mutation_range
         new_ub = value + mutation_range
         val = ContinuousRange(new_lb, new_ub).get_arbitrary()
@@ -167,13 +167,13 @@ class IntegralRange(DataRange):
     def get_arbitrary(self) -> Any:
         return random.randint(self.lb, self.ub)
 
-    def mutate_value(self, value: Any) -> Any:
+    def mutate_value(self, value: Any, granularity: int) -> Any:
         """
         To mutate, get a new limited range centered at the current location,
         and get a uniform value up or down from that.
         """
         # +7 to round up on mutation range
-        mutation_range = (self.ub - self.lb + 7) // 8
+        mutation_range = (self.ub - self.lb + granularity - 1) // granularity
         new_lb = value - mutation_range
         new_ub = value + mutation_range
         val = IntegralRange(new_lb, new_ub).get_arbitrary()
@@ -201,12 +201,13 @@ class DiscreteRange(DataRange):
     def get_arbitrary(self) -> Any:
         return random.choice(self.options)
 
-    def mutate_value(self, value: Any) -> Any:
+    def mutate_value(self, value: Any, granularity: int) -> Any:
         """
         To mutate, get our current index and mutate it.
         """
         index = self.options.index(value)
-        new_index = IntegralRange(0, len(self.options) - 1).mutate_value(index)
+        new_index = IntegralRange(0, len(self.options) - 1)\
+            .mutate_value(index, granularity)
         return self.options[new_index]
 
     def contains(self, val: Any) -> bool:
@@ -669,7 +670,6 @@ def consumption(config: Config):
                 else:
                     new_env = {}
 
-                run_env = os.environ.update(new_env)
                 # run the stage command, and handle any errors appropriately
                 get_logger().debug(f"running stage `{stage}` with cmd `{cmd}`")
                 if len(new_env) > 0:
@@ -679,7 +679,7 @@ def consumption(config: Config):
                 start = time.time()
                 proc = sp.run(cmd, shell=True, cwd=str(run_dir),
                               stdout=sp.PIPE, stderr=sp.STDOUT,
-                              encoding='utf-8', env=run_env)
+                              encoding='utf-8', env=os.environ.copy().update(new_env))
                 end = time.time()
                 if stage == "run":
                     runtime = end - start
@@ -912,6 +912,12 @@ class MutationSearch(SearchStrategy):
     """
     def __init__(self, root: TunableArg):
         super().__init__(root)
+        # mutates by 1/this for one of args to mutate
+        self.MUTATION_GRANULARITY = 8
+        # abandon after this many restarts
+        self.MAX_RESTARTS = 5
+        # restart after this many failed mutations
+        self.MAX_FAILED_MUTATIONS = 3
         # current number of failed mutations/restarts
         self.failed_mutations = 0
         self.restarts = 0
@@ -932,7 +938,7 @@ class MutationSearch(SearchStrategy):
             self.restarts += 1
             self.failed_mutations = 0
             # once we've restarted enough times, give up
-            if self.restarts >= 4:
+            if self.restarts >= self.MAX_RESTARTS:
                 return None
             return self.root.get_arbitrary_assignment()
         else:
@@ -942,7 +948,8 @@ class MutationSearch(SearchStrategy):
             # choose a random argument to mutate, and mutate it
             to_mutate = random.randint(0, len(mutated) - 1)
             key, old_val = mutated[to_mutate]
-            new_val = self.root.lookup(key).data_range.mutate_value(old_val)
+            new_val = self.root.lookup(key).data_range\
+                .mutate_value(old_val, self.MUTATION_GRANULARITY)
             mutated[to_mutate] = key, new_val
             # build and return the mutated assignment
             mutated = Assignment.from_path_assignments(mutated)
@@ -963,7 +970,7 @@ class MutationSearch(SearchStrategy):
             self.curr_time = runtime
         else:
             self.failed_mutations += 1
-            if self.failed_mutations == 5:
+            if self.failed_mutations == self.MAX_FAILED_MUTATIONS:
                 get_logger().debug("too many failed mutations, restarting")
                 self.curr_assignment = None
                 self.curr_time = None
