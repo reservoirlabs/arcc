@@ -52,11 +52,6 @@ def consumption(config: Config):
 
                 run_env = os.environ.copy()
                 run_env.update(new_env)
-                # Some magic flags that R-Stream uses
-                run_env.update({
-                    "ARCC_MODE": "consume",
-                    "ARCC_PERF": "rough",
-                })
                 # run the stage command, and handle any errors appropriately
                 get_logger().debug(f"running stage `{stage}` with cmd `{cmd}`")
                 if len(new_env) > 0:
@@ -102,3 +97,13 @@ def consumption(config: Config):
         get_logger().info(f"optimal assignment is:\n"
                           f"{assignment}\n"
                           f"runtime: {runtime}s")
+
+        build = StringFormatter(config.build).expand_assignment(assignment)
+        env = config.root.build_env(None, assignment)
+        if len(env) > 0:
+            build = "env " + ' '.join(f'{key}={val}'
+                                      for key, val in env.items()) \
+                        + " " + build
+        get_logger().info(f"rerun with: `{config.clean} && "
+                          f"{build} && "
+                          f"{config.run}`")

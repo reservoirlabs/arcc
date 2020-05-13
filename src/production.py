@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess as sp
 import tempfile
 from typing import List, Optional, Any, Dict, Iterator, Union
 
@@ -13,7 +14,7 @@ from src.assignment import Assignment
 from src.data_range import DataRange, ContinuousRange, DiscreteRange, \
     IntegralRange
 from src.search import MutationSearch, SearchStrategy, RandomSearch, DummySearch
-import subprocess as sp
+
 
 class StringFormatter:
     """
@@ -62,17 +63,15 @@ class TunableArg:
     Class representing an argument or group of arguments that can be
     automatically tuned.
     """
-    def __init__(self, name: str, env_key: Optional[StringFormatter],
-                 set_env: Optional[StringFormatter],
+    def __init__(self, name: str, env: Dict[StringFormatter, StringFormatter],
                  constraint: Optional[StringFormatter],
                  children: List["TunableArg"],
                  data_range: Optional[DataRange]):
         # name given to this arg. used for setting command-line/environment.
         # NOTE: the "full name" will be ...GRANDPARENT_NAME.PARENT_NAME.MY_NAME
         self.name = name
-        # how the environment variable key and value should be formatted
-        self.env_key = env_key
-        self.set_env = set_env
+        # how the environment variable keys and values should be formatted
+        self.env = env
         # how the constraint should be formatted
         self.constraint = constraint
         # children - empty list for leaf.
@@ -111,25 +110,24 @@ class TunableArg:
         # is represented by None and handled specially.
         if path is None:
             assert self.name == "GLOBAL"
-            assert self.set_env is None
             new_path = []
+            tr.update({key.expand_dict({}): val.expand_dict({})
+                      for key, val in self.env.items()})
         else:
             new_path = path + [self.name]
             # NOTE: normally, we'd use periods as a separator. However,
             # environment variables don't support periods in their name, so use
             # underscores instead. This shouldn't cause an issue, because even
             # though we are creating ambiguity, we don't need to go in the
-            # reverse direction. I'm not sure how this is parsed on the
-            # R-Stream side of things.
-            if self.set_env:
-                # expand the user-given key to get our key
-                # NOTE: this could be done in __init__ time
-                if self.env_key:
-                    env_key = self.env_key.expand_dict(
-                        {"name": self.name, "path": '_'.join(new_path)})
-                else:
-                    env_key = '_'.join(new_path)
-                tr[env_key] = self.set_env.expand_assignment(assignment)
+            # reverse direction.
+            tr.update({
+                # the key allows `name` and `path` specifiers
+                key.expand_dict({
+                    "name": self.name, "path": '_'.join(new_path)}):
+                # the value allows any child value specifier
+                val.expand_assignment(assignment)
+                for key, val in self.env.items()
+            })
         # build the remainder path recursively
         for child_name, child in self.children.items():
             tr.update(child.build_env(
@@ -304,9 +302,13 @@ def production(args: Any) -> Config:
         else:
             assert False, f"{stage} not specified in either " \
                           f"config file or command line args"
+    global_env = data.get("global_env")
+    if global_env is not None:
+        global_env = {StringFormatter(key): StringFormatter(value)
+                      for key, value in global_env.items()}
     # parse the tunable args from the config file, and add a GLOBAL root arg
     # that contains all of them
-    root = TunableArg("GLOBAL", None, None, None,
+    root = TunableArg("GLOBAL", global_env, None,
                       [parse_arg(arg, None) for arg in data["args"]], None)
 
     # choose and initialize the search strategy class with the tunable arguments
@@ -356,22 +358,17 @@ def parse_arg(datum: Any, path: Optional[List[str]]) -> TunableArg:
 
     # check if there are any unexpected keys, and warn if so. Do this first, as
     # it may be an indicator of an error to come.
-    possible_keys = ["name", "env_key", "set_env",
-                     "constraint", "range", "children"]
+    possible_keys = ["name", "env", "constraint", "range", "children"]
     for key in datum:
         if key not in possible_keys:
             get_logger().warning(f"unknown key {key} in {get_path()}")
 
     # environment variable formatter
-    set_env = datum.get("set_env")
-    if set_env is not None:
-        set_env = StringFormatter(set_env)
-    env_key = datum.get("env_key")
-    if env_key is not None:
-        assert set_env is not None, \
-            f"env_key specified but not set_env in {get_path()}: " \
-            f"can't set environment variable key without value"
-        env_key = StringFormatter(env_key)
+    env = datum.get("env")
+    if env is None:
+        env = {}
+    env = {StringFormatter(key): StringFormatter(val)
+           for key, val in env.items()}
 
     # constraint formatter
     constraint = datum.get("constraint")
@@ -409,7 +406,7 @@ def parse_arg(datum: Any, path: Optional[List[str]]) -> TunableArg:
     # recursively parse all our children
     children = [parse_arg(child, path) for child in datum.get("children", [])]
 
-    return TunableArg(name, env_key, set_env, constraint, children, range_data)
+    return TunableArg(name, env, constraint, children, range_data)
 
 
 def convert_classic_meta_data(
@@ -451,8 +448,7 @@ def convert_classic_meta_data(
                           lambda m: f"{{{strip_prefix(m.group(1))}}}", old)
         arg = {
             "name": meta_data.ID,
-            "env_key": "ARCC_OPTION_{name}",
-            "set_env": convert_old_to_new(meta_data.option),
+            "env": {"ARCC_OPTION_{name}": convert_old_to_new(meta_data.option)},
             "children": children,
         }
         # avoid appending the constraint if it's statically true
@@ -462,4 +458,10 @@ def convert_classic_meta_data(
 
         args.append(arg)
         meta_data = meta_data.next
-    return {"args": args}
+
+    # Some magic flags that R-Stream uses
+    env = {
+        "ARCC_MODE": "consume",
+        "ARCC_PERF": "rough",
+    }
+    return {"global_env": env, "args": args}

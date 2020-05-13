@@ -258,7 +258,7 @@ def parse(fname) -> meta_data_info.MetaDataInfo:
     """
 
     # Read the meta data file
-    get_logger().info('Reading meta data file: %s' % fname)
+    get_logger().debug('Reading meta data file: %s' % fname)
     with open(fname) as f:
         text = f.read()
 
