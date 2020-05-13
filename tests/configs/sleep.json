@@ -5,7 +5,7 @@
   "args": [
     {
       "name": "sleep_duration",
-      "env": {"{name}":  "SELF"},
+      "env": {"{name}":  "{SELF}"},
       "constraint": "{SELF} * {SELF} > .09",
       "range": {
         "continuous": [0.0, 0.5]
