@@ -1,11 +1,11 @@
 {
+  "clean": "rm -f sleep.sh",
   "build": "echo sleep {sleep_duration} > sleep.sh",
   "run": "bash ./sleep.sh",
-  "clean": "",
   "args": [
     {
       "name": "sleep_duration",
-      "set_env": "{SELF}",
+      "env": {"{name}":  "SELF"},
       "constraint": "{SELF} * {SELF} > .09",
       "range": {
         "continuous": [0.0, 0.5]

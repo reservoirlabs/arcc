@@ -1,6 +1,0 @@
-UJ_SMP_MATMULT {
-    option = "max_unroll=$A$,max_unroll_per_dimension=$B$,innermost=$C$";
-    var A = ["1","8","64","256"];var B = ["1","4","8","16"];
-    var C = ["true","false"];
-    constraint = (A>=B);
-}

@@ -1,6 +1,94 @@
 {
-  "build": "cp $ARCC_HOME/configs/matmult.c matmult.c && rcc -fopenmp matmult.c -S -o matmult.gen.c --polymap {} && gcc -fopenmp -O3 matmult.gen.c -I$RSTREAM_HOME/runtime/common/include -march=native",
-  "run": "./a.out",
-  "clean": "",
-  "args": []
+  "global_env": {
+    "ARCC_MODE": "consume",
+    "ARCC_PERF": "rough"
+  },
+  "args": [
+    {
+      "name": "MORPH_SELECT_SMP_MATMULT",
+      "env": {
+        "ARCC_OPTION_{name}": "geom={geom}"
+      },
+      "children": [
+        {
+          "name": "geom",
+          "range": {
+            "discrete": [
+              "{20}",
+              "{20}",
+              "{10}",
+              "{20}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "MPLACETILE_SMP_MATMULT",
+      "env": {
+        "ARCC_OPTION_{name}": "lenient={lenient},small_loops={small_loops},sizes={sizes}"
+      },
+      "children": [
+        {
+          "name": "lenient",
+          "range": {
+            "discrete": [
+              "true",
+              "false"
+            ]
+          }
+        },
+        {
+          "name": "small_loops",
+          "range": {
+            "discrete": [
+              "true",
+              "false"
+            ]
+          }
+        },
+        {
+          "name": "sizes",
+          "range": {
+            "discrete": [
+              "{64-1024-1024}",
+              "{64-512-1024}",
+              "{32-1024-1024}",
+              "{64-1024-512}",
+              "{64-256-1024}",
+              "{32-512-1024}",
+              "{64-512-512}",
+              "{32-1024-512}",
+              "{32-512-512}",
+              "{32-128-512}",
+              "{64-1024-256}",
+              "{64-256-512}",
+              "{64-1024-128}",
+              "{64-64-1024}",
+              "{32-512-128}",
+              "{64-512-256}",
+              "{1-1-1}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "POLYHEDRALMAPPERTACTIC_SMP_MATMULT",
+      "env": {
+        "ARCC_OPTION_{name}": "max_sink={max_sink}"
+      },
+      "children": [
+        {
+          "name": "max_sink",
+          "range": {
+            "discrete": [
+              "true",
+              "false"
+            ]
+          }
+        }
+      ]
+    }
+  ]
 }

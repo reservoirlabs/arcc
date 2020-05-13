@@ -3,15 +3,18 @@ import pathlib
 import shutil
 import subprocess as sp
 import time
+from typing import Optional
 
 from src.arcc_main import get_logger
 from src.production import Config, StringFormatter
 
+from src.assignment import Assignment
 
-def consumption(config: Config):
+
+def consumption(config: Config) -> Optional["Assignment"]:
     """
     The core logic. Consumes the config, optimizing arguments to maximize
-    performance. Currently, only has one walk strategy -
+    performance.
     """
     get_logger().info(f"starting search, output in {config.output}")
     # make the high level output folder
@@ -86,18 +89,19 @@ def consumption(config: Config):
                     get_logger().warning(f"can't find file {file} to preserve")
                 else:
                     shutil.copy(str(file), str(fresh_dir.joinpath(file.name)))
-
     # finished all runs! clean up and print results
     get_logger().info(f"finished executing in {config.output}")
     optimal = config.search_strategy.get_optimal()
     if optimal is None:
         get_logger().info("no optimal assignment found")
+        return None
     else:
         assignment, runtime = optimal
         get_logger().info(f"optimal assignment is:\n"
                           f"{assignment}\n"
                           f"runtime: {runtime}s")
 
+        # print out what the user should rerun the full process
         build = StringFormatter(config.build).expand_assignment(assignment)
         env = config.root.build_env(None, assignment)
         if len(env) > 0:
@@ -107,3 +111,4 @@ def consumption(config: Config):
         get_logger().info(f"rerun with: `{config.clean} && "
                           f"{build} && "
                           f"{config.run}`")
+        return assignment

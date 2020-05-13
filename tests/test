@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+import os
+import pathlib
+import sys
+
+"""
+Wrapper file that calls test_main.py directly after setting up some path stuff.
+"""
+
+
+def get_arcc_home() -> pathlib.Path:
+    """
+    Get ARCC home (e.g., ~/work/arcc) based on a relative path of this file.
+    """
+    tr = pathlib.Path(__file__).parent.parent.absolute()
+    # just in case this moves around
+    assert tr.exists()
+    assert tr.name == "arcc"
+    return tr
+
+
+if __name__ == '__main__':
+    arcc_home = str(get_arcc_home())
+    sys.path.append(arcc_home)
+    os.environ["ARCC_HOME"] = arcc_home
+    from tests.test_main import main
+    main()

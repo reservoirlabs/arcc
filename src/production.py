@@ -5,7 +5,7 @@ import pathlib
 import re
 import subprocess as sp
 import tempfile
-from typing import List, Optional, Any, Dict, Iterator, Union
+from typing import List, Optional, Any, Dict, Iterator, Union, Callable
 
 import src.meta_data_info
 import src.meta_data_parser
@@ -200,63 +200,20 @@ def production(args: Any) -> Config:
     def temp_dir():
         nonlocal arcc_tmp_dir
         if arcc_tmp_dir is None:
-            arcc_tmp_dir = tempfile.mkdtemp(prefix='arcc-',)
+            arcc_tmp_dir = tempfile.mkdtemp(prefix='arcc-')
             return arcc_tmp_dir
         else:
             return arcc_tmp_dir
 
     if args.config_classic is None and args.config is None:
-        """
-        This is a bit of a sore spot. Production and consumption are very 
-        different operations, but R-Stream kinda wants to do both with the same
-        workflow. The idea is to "run without an assignment" to generate a 
-        configuration, but that really isn't possible with most commands. For 
-        example, how should `cmd --opt1 {opt1} --opt2 {opt2}` be run in 
-        production mode? One idea would be to set some magic flags that tells
-        `cmd` to run in production mode, but then what should be substituted in
-        that command line argument?
-        
-        Unfortunately, I think the most reasonable solution would be to require
-        the user to generate this config, but that would break existing ARCC
-        workflow. It might be worth moving this logic out to another command in
-        bin/ that is an R-Stream specific way of generating this config to 
-        separate out the R-Stream specific logic, but leaving it here for now.
-        """
         get_logger().info("no config specified; generating one.\n"
                           "this is mostly meant as backward compatibility with "
                           "R-Stream, it is recommended to generate one before "
                           "calling arcc and to pass it in.")
-        meta_file = None
-        # no need tor run, since just bulding configuration
-        for stage in ["clean", "build"]:
-            cmd_data = getattr(args, stage)
-            assert cmd_data is not None, f"must specify command for `{stage}`"
-            run_env = os.environ.copy()
-            if stage == "build":
-                # add some magic environment variables
-                meta_file = os.path.join(temp_dir(), "arcc.meta")
-                run_env.update({
-                    "ARCC_METADATA": meta_file,
-                    "ARCC_OPTIONUSEMODE": "default",
-                    "ARCC_MODE": "produce",
-                })
-            # run, handle errors
-            proc = sp.run(cmd_data, shell=True, env=run_env,
-                          stdout=sp.PIPE, stderr=sp.STDOUT,
-                          encoding='utf-8')
-            if proc.returncode != 0:
-                get_logger().info(f"stage `{stage}` failed with exit code "
-                                  f"{proc.returncode}:\n{proc.stdout}")
-                assert False, "failed to generate configuration"
-            if stage == "build":
-                if not os.path.exists(meta_file):
-                    get_logger().info(f"build returned zero exit code, but "
-                                      f"failed to generate {meta_file}:\n"
-                                      f"{proc.stdout}")
-                    assert False, "failed to generate configuration"
-                get_logger().info(f"generated config file {meta_file}")
-                # set the classic config, and flow through the rest of the logic
-                args.config_classic = meta_file
+        meta_file = rstream_production(args.clean, args.build, temp_dir)
+        get_logger().info(f"generated config file {meta_file}")
+        # set the classic config, and flow through the rest of the logic
+        args.config_classic = meta_file
 
     if args.config_classic:
         # classic format
@@ -306,6 +263,8 @@ def production(args: Any) -> Config:
     if global_env is not None:
         global_env = {StringFormatter(key): StringFormatter(value)
                       for key, value in global_env.items()}
+    else:
+        global_env = {}
     # parse the tunable args from the config file, and add a GLOBAL root arg
     # that contains all of them
     root = TunableArg("GLOBAL", global_env, None,
@@ -328,6 +287,61 @@ def production(args: Any) -> Config:
     return Config(stages[0], stages[1], stages[2], root,
                   args.max_iter, pathlib.Path(args.output), search_strategy,
                   args.preserve, args.fresh_dir)
+
+
+def rstream_production(clean: str, build: str,
+                       temp_dir: Callable[[], str]) -> str:
+    """
+    Take in the build and clean command, and a function that returns a temporary
+    directory when called. Return a string with the path to the generated meta
+    data.
+
+    This is a bit of a sore spot. Production and consumption are very
+    different operations, but R-Stream kinda wants to do both with the same
+    workflow. The idea is to "run without an assignment" to generate a
+    configuration, but that really isn't possible with most commands. For
+    example, how should `cmd --opt1 {opt1} --opt2 {opt2}` be run in
+    production mode? One idea would be to set some magic flags that tells
+    `cmd` to run in production mode, but then what should be substituted in
+    that command line argument?
+
+    Unfortunately, I think the most reasonable solution would be to require
+    the user to generate this config, but that would break existing ARCC
+    workflow. It might be worth moving this logic out to another command in
+    bin/ that is an R-Stream specific way of generating this config to
+    separate out the R-Stream specific logic, but leaving it here for now.
+    """
+    meta_file = None
+    stages = {"clean": clean, "build": build}
+    # no need tor run, since just building configuration
+    for stage in ["clean", "build"]:
+        cmd_data = stages[stage]
+        assert cmd_data is not None, f"must specify command for `{stage}`"
+        run_env = os.environ.copy()
+        if stage == "build":
+            # add some magic environment variables
+            meta_file = os.path.join(temp_dir(), "arcc.meta")
+            run_env.update({
+                "ARCC_METADATA": meta_file,
+                "ARCC_OPTIONUSEMODE": "default",
+                "ARCC_MODE": "produce",
+            })
+        get_logger().debug("running " + cmd_data)
+        # run, handle errors
+        proc = sp.run(cmd_data, shell=True, env=run_env,
+                      stdout=sp.PIPE, stderr=sp.STDOUT,
+                      encoding='utf-8')
+        if proc.returncode != 0:
+            get_logger().info(f"stage `{stage}` failed with exit code "
+                              f"{proc.returncode}:\n{proc.stdout}")
+            assert False, "failed to generate configuration"
+        if stage == "build":
+            if not os.path.exists(meta_file):
+                get_logger().info(f"build returned zero exit code, but "
+                                  f"failed to generate {meta_file}:\n"
+                                  f"{proc.stdout}")
+                assert False, "failed to generate configuration"
+    return meta_file
 
 
 def parse_arg(datum: Any, path: Optional[List[str]]) -> TunableArg:
@@ -378,35 +392,39 @@ def parse_arg(datum: Any, path: Optional[List[str]]) -> TunableArg:
     # range field should specify what type of range, with necessary data
     range_data = datum.get("range")
     if range_data is not None:
-        assert len(range_data) == 1, \
-            f"only one range specification allowed in {get_path()}"
-        key, value = list(range_data.items())[0]
-
-        # continuous float between lower and upper bound
-        if key == "continuous":
-            assert isinstance(value, list), "expected list"
-            assert len(value) == 2, "expected length 2: lower and upper bound"
-            lb = float(value[0])
-            ub = float(value[1])
-            range_data = ContinuousRange(lb, ub)
-        # integer between lower and upper bound
-        elif key == "integral":
-            assert isinstance(value, list), "expected list"
-            assert len(value) == 2, "expected length 2: lower and upper bound"
-            lb = int(value[0])
-            ub = int(value[1])
-            range_data = IntegralRange(lb, ub)
-        # discrete list of possibilities
-        elif key == "discrete":
-            assert isinstance(value, list), "expected list"
-            range_data = DiscreteRange(list(map(str, value)))
-        else:
-            assert False, f"unknown range specifier: {key} in {get_path()}"
+        range_data = parse_range_data(get_path, range_data)
 
     # recursively parse all our children
     children = [parse_arg(child, path) for child in datum.get("children", [])]
 
     return TunableArg(name, env, constraint, children, range_data)
+
+
+def parse_range_data(get_path, range_data):
+    assert len(range_data) == 1, \
+        f"only one range specification allowed in {get_path()}"
+    key, value = list(range_data.items())[0]
+    # continuous float between lower and upper bound
+    if key == "continuous":
+        assert isinstance(value, list), "expected list"
+        assert len(value) == 2, "expected length 2: lower and upper bound"
+        lb = float(value[0])
+        ub = float(value[1])
+        range_data = ContinuousRange(lb, ub)
+    # integer between lower and upper bound
+    elif key == "integral":
+        assert isinstance(value, list), "expected list"
+        assert len(value) == 2, "expected length 2: lower and upper bound"
+        lb = int(value[0])
+        ub = int(value[1])
+        range_data = IntegralRange(lb, ub)
+    # discrete list of possibilities
+    elif key == "discrete":
+        assert isinstance(value, list), "expected list"
+        range_data = DiscreteRange(list(map(str, value)))
+    else:
+        assert False, f"unknown range specifier: {key} in {get_path()}"
+    return range_data
 
 
 def convert_classic_meta_data(
