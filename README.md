@@ -21,14 +21,11 @@ There are two formats - one of them is a legacy format used currently by R-Strea
 The high-level format is: 
 ```
 { 
-    "clean": str, (optional)
-    "build": str, (optional)
-    "run": str, (optional)
     "global_env": Dict[str, str], (optional)
     "args": List[Arg],
 }
 ```
-The `clean`, `build`, and `run` are an alternate way of specifying the commands that arcc should use, rather than through the command line. The "global_env" contains a dictionary of environment variables to set before running any test (e.g., if the build tool needs to be notified that it's being called from `arcc`). `args` contains the actual list of arguments to tune.
+The "global_env" contains a dictionary of environment variables to set before running any test (e.g., if the build tool needs to be notified that it's being called from `arcc`). `args` contains the actual list of arguments to tune.
 
 The format of each `Arg` is:
 ```
