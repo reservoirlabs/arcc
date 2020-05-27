@@ -3,8 +3,10 @@ import json
 import os
 import pathlib
 import re
-import subprocess as sp
+import shutil
 import tempfile
+from abc import ABC
+from pathlib import Path
 from typing import List, Optional, Any, Dict, Iterator, Union, Callable
 
 import src.meta_data_info
@@ -13,7 +15,24 @@ from src.arcc_main import get_logger
 from src.assignment import Assignment
 from src.data_range import DataRange, ContinuousRange, DiscreteRange, \
     IntegralRange
-from src.search import MutationSearch, SearchStrategy, RandomSearch, DummySearch
+
+
+class ArgFile(ABC):
+    pass
+
+
+class ClassicArgFile(ArgFile):
+    def __init__(self, file):
+        self.file = file
+
+
+class NewArgFile(ArgFile):
+    def __init__(self, file):
+        self.file = file
+
+
+class RstreamArgFile(ArgFile):
+    pass
 
 
 class StringFormatter:
@@ -154,29 +173,20 @@ class TunableArg:
 
 class Config:
     """
-    Configuration class produced during "production", and consumed during
-    "consumption".
+    Configuration class with user-specified execution options.
     """
-    def __init__(self, clean: str, build: str, run: str,
-                 root: "TunableArg", max_iter: Optional[int],
-                 output: pathlib.Path, search_strategy: "SearchStrategy",
-                 preserve_files: List[pathlib.Path], fresh_dir: bool):
-        # clean/build/run commands
-        self.clean = clean
-        self.build = build
-        self.run = run
-        # root of all arguments - uses a tree structure
-        self.root = root
-        # maximum trials, or none for indefinite
+    def __init__(self, max_iter: Optional[int], output: pathlib.Path,
+                 preserve_files: List[pathlib.Path], search_class):
+        """
+        @param max_iter: maximum iterations, or None for indefinite
+        @param output: output folder (e.g. arcc-codes/arcc-run-date)
+        @param preserve_files: files to preserve
+        @param search_class: search strategy class (e.g. MutationSearch)
+        """
         self.max_iter = max_iter
-        # output folder (e.g. arcc-codes/arcc-run-date)
         self.output = output
-        # search strategy (random, mutation, etc) class
-        self.search_strategy = search_strategy
-        # files to preserve
         self.preserve_files = preserve_files
-        # whether to switch to a fresh directory
-        self.fresh_dir = fresh_dir
+        self.search_class = search_class
 
     def run_iter(self) -> Iterator[int]:
         """
@@ -188,159 +198,84 @@ class Config:
             return range(self.max_iter)
 
 
-def production(args: Any) -> Config:
+def production(assignment_handler, argfile: Path, output: Path) -> TunableArg:
     """
-    Production - convert parsed arguments to a config that can be executed.
+    Production - convert parsed arguments to a root arg
     """
-    arcc_tmp_dir = None
 
-    """
-    Helper function to lazily create a temporary directory only when necessary.
-    """
-    def temp_dir():
-        nonlocal arcc_tmp_dir
-        if arcc_tmp_dir is None:
-            arcc_tmp_dir = tempfile.mkdtemp(prefix='arcc-')
-            return arcc_tmp_dir
-        else:
-            return arcc_tmp_dir
+    output.mkdir(parents=True, exist_ok=True)
 
-    if args.config_classic is None and args.config is None:
-        get_logger().info("no config specified; generating one.\n"
-                          "this is mostly meant as backward compatibility with "
-                          "R-Stream, it is recommended to generate one before "
-                          "calling arcc and to pass it in.")
-        meta_file = rstream_production(args.clean, args.build, temp_dir)
-        get_logger().info(f"generated config file {meta_file}")
-        # set the classic config, and flow through the rest of the logic
-        args.config_classic = meta_file
+    # if our argfile is an R-Stream argfile, that means it doesn't exist, and
+    # we need to create the file with tunable args. This will then flow through
+    # the rest of the logic.
+    if isinstance(argfile, RstreamArgFile):
+        get_logger().info("no argfile specified; generating one")
+        meta_file = produce_rstream_argfile(assignment_handler, output)
 
-    if args.config_classic:
-        # classic format
-        config_file = pathlib.Path(args.config_classic)
-        assert config_file.exists(), "can't find classic config file " \
-                                     + args.config_classic
+        argfile = ClassicArgFile(Path(meta_file))
+
+    if isinstance(argfile, ClassicArgFile):
+        assert argfile.file.exists(), \
+            f"can't find classic argfile {argfile.file}"
         # parse it using the existing parser
-        meta_data = src.meta_data_parser.parse(config_file)
+        meta_data = src.meta_data_parser.parse(argfile.file)
         # conversion step
         data = convert_classic_meta_data(meta_data)
-        arcc_new_file = os.path.join(temp_dir(), "arcc-new.json")
+        arcc_new_file = output.joinpath("args.json")
         get_logger().info(f"placing converted file in {arcc_new_file}")
-        with open(arcc_new_file, 'w') as f:
+        with open(str(arcc_new_file), 'w') as f:
             json.dump(data, f, indent=2)
-    elif args.config:
+    elif isinstance(argfile, NewArgFile):
         # new format
-        config_file = pathlib.Path(args.config)
-        assert config_file.exists(), "can't find config file " \
-                                     + args.config_classic
+        assert argfile.file.exists(), f"can't find args file {argfile.file}"
+        shutil.copyfile(str(argfile.file),
+                        str(output.joinpath("args.json")))
         # just read the data as-is from the file
-        with open(config_file) as f:
+        with open(argfile.file) as f:
             data = json.load(f)
     else:
-        assert False, "unreachable: no config specified"
-    # load each of the stages from the file/command line
-    # NOTE: the "clean" stage is no longer necessary, as each test is ran in a
-    # separate folder.
-    stages = []
-    for stage in ["clean", "build", "run"]:
-        file_data = data.get(stage)
-        cmd_data = getattr(args, stage)
-        # by default, use the cmd line argument
-        if cmd_data is not None and file_data is not None:
-            stages.append(cmd_data)
-            # warn since specified in both
-            get_logger().warning(f"{stage} specified in both config file "
-                                 f"and command line args. using value in "
-                                 f"command file")
-        elif cmd_data is not None:
-            stages.append(cmd_data)
-        elif file_data is not None:
-            stages.append(file_data)
-        else:
-            assert False, f"{stage} not specified in either " \
-                          f"config file or command line args"
+        assert False, "should be unreachable: no argfile specified"
     global_env = data.get("global_env")
     if global_env is not None:
         global_env = {StringFormatter(key): StringFormatter(value)
                       for key, value in global_env.items()}
     else:
         global_env = {}
-    # parse the tunable args from the config file, and add a GLOBAL root arg
-    # that contains all of them
+    # parse the tunable args from the argfile, and add a GLOBAL root arg that
+    # contains all of them
     root = TunableArg("GLOBAL", global_env, None,
                       [parse_arg(arg, None) for arg in data["args"]], None)
-
-    # choose and initialize the search strategy class with the tunable arguments
-    if args.dummy:
-        search_strategy = DummySearch
-    elif args.random:
-        search_strategy = RandomSearch
-    elif args.mutation:
-        search_strategy = MutationSearch
-    else:
-        get_logger().info("defaulting to mutation search strategy")
-        search_strategy = MutationSearch
-    if args.preserve is None:
-        args.preserve = []
-    args.preserve = [pathlib.Path(file) for file in args.preserve]
-    search_strategy = search_strategy(root)
-    return Config(stages[0], stages[1], stages[2], root,
-                  args.max_iter, pathlib.Path(args.output), search_strategy,
-                  args.preserve, args.fresh_dir)
+    return root
 
 
-def rstream_production(clean: str, build: str,
-                       temp_dir: Callable[[], str]) -> str:
+def produce_rstream_argfile(assignment_handler, output) -> Path:
     """
-    Take in the build and clean command, and a function that returns a temporary
-    directory when called. Return a string with the path to the generated meta
-    data.
+    Takes in an assignment an output dir, returns path to metafile.
 
     This is a bit of a sore spot. Production and consumption are very
     different operations, but R-Stream kinda wants to do both with the same
-    workflow. The idea is to "run without an assignment" to generate a
-    configuration, but that really isn't possible with most commands. For
-    example, how should `cmd --opt1 {opt1} --opt2 {opt2}` be run in
-    production mode? One idea would be to set some magic flags that tells
-    `cmd` to run in production mode, but then what should be substituted in
-    that command line argument?
+    workflow. The idea is to "run without an assignment" to generate an argfile,
+    but that really isn't possible with most commands. For example, how should
+    `cmd --opt1 {opt1} --opt2 {opt2}` be run in production mode? One idea would
+    be to set some magic flags that tells `cmd` to run in production mode, but
+    then what should be substituted in that command line argument?
 
     Unfortunately, I think the most reasonable solution would be to require
-    the user to generate this config, but that would break existing ARCC
+    the user to generate this argfile, but that would break existing ARCC
     workflow. It might be worth moving this logic out to another command in
-    bin/ that is an R-Stream specific way of generating this config to
+    bin/ that is an R-Stream specific way of generating this argfile to
     separate out the R-Stream specific logic, but leaving it here for now.
     """
-    meta_file = None
-    stages = {"clean": clean, "build": build}
-    # no need tor run, since just building configuration
-    for stage in ["clean", "build"]:
-        cmd_data = stages[stage]
-        assert cmd_data is not None, f"must specify command for `{stage}`"
-        run_env = os.environ.copy()
-        if stage == "build":
-            # add some magic environment variables
-            meta_file = os.path.join(temp_dir(), "arcc.meta")
-            run_env.update({
-                "ARCC_METADATA": meta_file,
-                "ARCC_OPTIONUSEMODE": "default",
-                "ARCC_MODE": "produce",
-            })
-        get_logger().debug("running " + cmd_data)
-        # run, handle errors
-        proc = sp.run(cmd_data, shell=True, env=run_env,
-                      stdout=sp.PIPE, stderr=sp.STDOUT,
-                      encoding='utf-8')
-        if proc.returncode != 0:
-            get_logger().info(f"stage `{stage}` failed with exit code "
-                              f"{proc.returncode}:\n{proc.stdout}")
-            assert False, "failed to generate configuration"
-        if stage == "build":
-            if not os.path.exists(meta_file):
-                get_logger().info(f"build returned zero exit code, but "
-                                  f"failed to generate {meta_file}:\n"
-                                  f"{proc.stdout}")
-                assert False, "failed to generate configuration"
+    meta_file = output.joinpath("arcc.meta")
+    magic_env = {
+        "ARCC_METADATA": str(meta_file),
+        "ARCC_OPTIONUSEMODE": "default",
+        "ARCC_MODE": "produce",
+    }
+    # actually perform production. this varies on the assignment handler,
+    # since it's like we're running "without an assignment"
+    assignment_handler.rstream_production(magic_env)
+    assert meta_file.exists(), "R-Stream failed to make the argfile"
     return meta_file
 
 
