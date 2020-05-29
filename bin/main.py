@@ -10,7 +10,9 @@ import subprocess as sp
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
+import sys
 from typing import List, Optional, Any, Dict, Iterator, Tuple
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
 
 def get_logger() -> logging.Logger:
@@ -260,6 +262,7 @@ class Cmdline(FormatValue):
 
 
 def get_config() -> Config:
+    here = os.getcwd()
     parser = argparse.ArgumentParser(
         description='ARCC is an automated tuning tool designed to tune '
                     'compiler flags for optimal performance.')
@@ -279,7 +282,7 @@ def get_config() -> Config:
                         action='store_const', const="log.txt")
     parser.add_argument('--max-trials', '-n', type=int, help="number of trials")
     parser.add_argument('--output', help="output location",
-                        default=get_arcc_home()
+                        default=pathlib.Path(here)
                         .joinpath("arcc-codes", f"arcc-run-{datetime.now()}"))
 
     strategy_group = parser.add_mutually_exclusive_group()

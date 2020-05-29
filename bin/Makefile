@@ -6,7 +6,7 @@
 .PHONY: all clean
 
 all:
-	python -mcompileall .
+	python3 -mcompileall .
 
 clean:
 	rm -rf `find . -name "*.pyc"`
