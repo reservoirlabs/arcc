@@ -8,15 +8,15 @@
 
 import re
 
-#----------------------------------------------------------
 
 class MetaDataInfo:
     '''The class that contains meta data information'''
-    
-    def __init__(self, reporter, line_no, ID, option, var_list, var_vals_list, constraint, next):
-        '''Instantiate a meta data information'''
 
-        self.__reporter = reporter  # the used reporting tool
+    def __init__(self, line_no, ID, option, var_list, var_vals_list, constraint,
+                 next):
+        """
+        Instantiate a meta data information
+        """
 
         self.line_no = line_no  # the line position of this meta data info (in the meta data file)
         self.ID = ID  # the string identifier of this meta data
@@ -32,79 +32,93 @@ class MetaDataInfo:
 
         # Evaluate the variable values expressions
         self.__evalVarRHS()
-        
+
         # Rename the variable names by mangling each name with the ID name
         self.__mangleVarNames()
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
     def __evalOptionRHS(self):
         '''Evaluate the option string'''
-        
+
         try:
             n_opt = eval(self.option)
         except Exception as e:
-            raise self.__reporter.error('Invalid option string for "%s" in "%s"' % (self.option, self.ID))
+            raise Exception('Invalid option string for "%s" in "%s"' % (
+                self.option, self.ID))
         if type(n_opt) != str:
-            raise self.__reporter.error('Option value in "%s" must be of a string type' % self.ID)
+            raise Exception(
+                'Option value in "%s" must be of a string type' % self.ID)
         self.option = n_opt
-        
-    #------------------------------------------------------
+
+    # ------------------------------------------------------
 
     def __evalVarRHS(self):
         '''Evaluate the RHS expressions of the variables'''
-        
+
         # Check for redundant variable names
         for v in self.var_list:
             if self.var_list.count(v) > 1:
-                raise self.__reporter.error('Variable name "%s" defined multiple times in "%s"' % (v, self.ID))
+                raise Exception(
+                    'Variable name "%s" defined multiple times in "%s"' % (
+                        v, self.ID))
 
         # Check and evaluate the variable values (must be a list)
         n_var_vals_list = []
         for v, vals in zip(self.var_list, self.var_vals_list):
             try:
-                assert type(vals) == str, 'variable values must be initially of string types'
+                assert type(
+                    vals) == str, 'variable values must be initially of string types'
                 n_vals = eval(vals)
                 n_var_vals_list.append(n_vals)
             except Exception as e:
-                raise self.__reporter.error('Invalid variable values expression for "%s" in "%s"' % (v, self.ID))
+                raise Exception(
+                    'Invalid variable values expression for "%s" in "%s"' % (
+                        v, self.ID))
             if type(n_vals) != list:
-                raise self.__reporter.error('Variable values expression for "%s" in "%s" must be of a list type' % (v, self.ID))
+                raise Exception(
+                    'Variable values expression for "%s" in "%s" must be of a list type' % (
+                        v, self.ID))
         self.var_vals_list = n_var_vals_list
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
     def __mangleVarNames(self):
         '''Rename the variable names by mangling each name with the ID name'''
-        
+
         # Rename the option string
         for v in self.var_list:
-            self.option = re.sub(r'(\W)\$(%s)\$(\W)' % v, r'\1$%s_\2$\3' % self.ID, ' %s ' % self.option).strip()
+            self.option = re.sub(r'(\W)\$(%s)\$(\W)' % v,
+                                 r'\1$%s_\2$\3' % self.ID,
+                                 ' %s ' % self.option).strip()
 
         # Rename the constraint expression
         for v in self.var_list:
-            self.constraint = re.sub(r'(\W)(%s)(\W)' % v, r'\1%s_\2\3' % self.ID, ' %s ' % self.constraint).strip()
+            self.constraint = re.sub(r'(\W)(%s)(\W)' % v,
+                                     r'\1%s_\2\3' % self.ID,
+                                     ' %s ' % self.constraint).strip()
 
         # Rename the variable names
         self.var_list = ['%s_%s' % (self.ID, x) for x in self.var_list]
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
     def __coordToVarVals(self, coord):
         '''Return the size of the dimension i'''
 
-        assert not self.isOutsideSpace(coord), 'given coordinate is outside the search space'
+        assert not self.isOutsideSpace(
+            coord), 'given coordinate is outside the search space'
         this_coord = coord[:len(self.var_list)]
         rest_coord = coord[len(self.var_list):]
         vals = []
         for i, c in enumerate(this_coord):
             vals.append(self.var_vals_list[i][c])
-        if self.__next__ == None:
-            return vals 
+        if self.next is None:
+            return vals
         else:
             return vals + self.next.__coordToVarVals(rest_coord)
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
     def __createEnv(self, coord):
         '''
@@ -112,40 +126,41 @@ class MetaDataInfo:
         corresponding value (based on the given coordinate)
         '''
 
-        assert not self.isOutsideSpace(coord), 'given coordinate is outside the search space'
+        assert not self.isOutsideSpace(
+            coord), 'given coordinate is outside the search space'
         vars = []
         mdata = self
-        while mdata != None:
+        while mdata is not None:
             vars.extend(mdata.var_list)
-            mdata = mdata.__next__
+            mdata = mdata.next
         vals = self.__coordToVarVals(coord)
         return dict(list(zip(vars, vals)))
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
     def __dimSizeAt(self, i):
         '''Return the size of the dimension i'''
-        
+
         if i < 0:
             assert False, 'invalid negative dimension index'
         elif i < len(self.var_list):
             return len(self.var_vals_list[i])
-        elif self.__next__ != None:
+        elif self.next is not None:
             return self.next.__dimSizeAt(i - len(self.var_list))
         else:
             assert False, 'invalid given dimension index'
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
     def __totalDimNum(self):
         '''Return the total dimension'''
 
-        if self.__next__ == None:
-            return len(self.var_list) 
+        if self.next == None:
+            return len(self.var_list)
         else:
             return len(self.var_list) + self.next.__totalDimNum()
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
     def globalConstraint(self, e):
         '''
@@ -154,39 +169,40 @@ class MetaDataInfo:
         already mangled with their meta data IDs.
         '''
 
-        assert e != None, 'the given constraint cannot be None'
+        assert e is not None, 'the given constraint cannot be None'
         if self.global_constraint == 'True':
             self.global_constraint = e
         else:
-            self.global_constraint = '(%s) and (%s)' % (self.global_constraint, e)
+            self.global_constraint = '(%s) and (%s)' % (
+                self.global_constraint, e)
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
     def add(self, mdata):
         '''Append a new meta data info to the end of this meta data list'''
 
         # Assert check
-        assert mdata != None, 'the given meta data must not be None'
+        assert mdata is not None, 'the given meta data must not be None'
 
         # Look for an empty next link
         cur_mdata = self
-        while cur_mdata.__next__ != None:
-            cur_mdata = cur_mdata.__next__
-        
+        while cur_mdata.next is not None:
+            cur_mdata = cur_mdata.next
+
         # Append the new meta data
         cur_mdata.next = mdata
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
     def dimSizes(self):
         '''Return the dimension sizes'''
-        
+
         dsizes = []
         for i in range(0, self.__totalDimNum()):
             dsizes.append(self.__dimSizeAt(i))
         return dsizes
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
     def isOutsideSpace(self, coord):
         '''
@@ -200,7 +216,7 @@ class MetaDataInfo:
                 return True
         return False
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
     def isNotPruned(self, coord):
         '''
@@ -208,23 +224,27 @@ class MetaDataInfo:
         space (i.e., not pruned out)
         '''
 
-        assert not self.isOutsideSpace(coord), 'given coordinate is outside the search space'
+        assert not self.isOutsideSpace(
+            coord), 'given coordinate is outside the search space'
         env = self.__createEnv(coord)
         is_not_pruned = True
         mdata = self
-        while mdata != None:
+        while mdata is not None:
             try:
                 is_not_pruned = is_not_pruned and eval(mdata.constraint, env)
             except Exception as e:
-                raise self.__reporter.error('Invalid constraint for %s: %s' % (mdata.ID, mdata.constraint))
+                raise Exception('Invalid constraint for %s: %s' % (
+                    mdata.ID, mdata.constraint))
             try:
-                is_not_pruned = is_not_pruned and eval(mdata.global_constraint, env)
+                is_not_pruned = is_not_pruned and eval(mdata.global_constraint,
+                                                       env)
             except Exception as e:
-                raise self.__reporter.error('Invalid global constraint: "%s"' % mdata.global_constraint)
-            mdata = mdata.__next__
+                raise Exception(
+                    'Invalid global constraint: "%s"' % mdata.global_constraint)
+            mdata = mdata.next
         return is_not_pruned
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
     def getOptions(self, coord):
         '''
@@ -232,33 +252,40 @@ class MetaDataInfo:
         tuples. Each tuple contains two elements: the ID and its
         corresponding option.
         '''
-        
-        assert not self.isOutsideSpace(coord) and self.isNotPruned(coord), 'given coordinate is outside the search space'
+
+        assert not self.isOutsideSpace(coord) and self.isNotPruned(
+            coord), 'given coordinate is outside the search space'
         env = self.__createEnv(coord)
         opts = []
         mdata = self
-        while mdata != None:
+        while mdata is not None:
             n_opt = mdata.option
             for v in mdata.var_list:
                 v_re = '\$%s\$' % v
                 if len(re.findall(v_re, n_opt)) == 0:
-                    raise self.__reporter.error('No variable "%s" found in the option of %s' % (v, mdata.ID))
+                    raise Exception(
+                        'No variable "%s" found in the option of %s' % (
+                            v, mdata.ID))
                 n_opt = re.sub(v_re, str(env[v]), n_opt)
             for v in re.findall('\$\w+\$', n_opt):
-                raise self.__reporter.error('Undefined variable "%s" in the option of %s' % (v, mdata.ID))
+                raise Exception(
+                    'Undefined variable "%s" in the option of %s' % (
+                        v, mdata.ID))
             opts.append((mdata.ID, n_opt))
-            mdata = mdata.__next__
+            mdata = mdata.next
         return opts
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
-    def semantCheck(self, meta_data_map={}):
+    def semantCheck(self, meta_data_map=None):
         '''Check the semantic correctness of all meta data info'''
 
+        if meta_data_map is None:
+            meta_data_map = {}
         # Check for redundant IDs
         if self.ID in meta_data_map:
-            raise self.__reporter.error('Meta data with ID "%s" already defined' % self.ID)
-        
+            raise Exception('Meta data with ID "%s" already defined' % self.ID)
+
         # Take one valid coordinate
         coord = [0] * self.__totalDimNum()
 
@@ -274,15 +301,15 @@ class MetaDataInfo:
         meta_data_map[self.ID] = self
 
         # Recurse to the next meta data info
-        if self.__next__ != None:
+        if self.next is not None:
             self.next.semantCheck(meta_data_map)
 
-    #------------------------------------------------------
+    # ------------------------------------------------------
 
-    def __repr__(self): 
+    def __repr__(self):
         '''Return a string representation of this meta data info'''
-        
-        s = '\n'
+
+        s = ''
         s += '%s {\n' % self.ID
         s += '  option = %s; \n' % self.option
         for (var, val) in zip(self.var_list, self.var_vals_list):
@@ -292,7 +319,5 @@ class MetaDataInfo:
         if self.global_constraint != 'True':
             s += '\n'
             s += 'global constraint = %s; \n' % self.global_constraint
-        s += '%s' % {True: self.next, False: ''}[self.next != None]
+        s += '%s' % {True: self.next, False: ''}[self.next is not None]
         return s
-
-

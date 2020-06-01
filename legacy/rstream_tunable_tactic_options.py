@@ -7,7 +7,8 @@
 #
 
 import os, subprocess
-from . import tunable_tactic_options
+from legacy import tunable_tactic_options
+
 
 #----------------------------------------------------------
 

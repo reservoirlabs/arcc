@@ -6,12 +6,12 @@
 # $Id$
 #
 
-import random 
-import search.search_engine
+import random
+
 
 #----------------------------------------------------------
 
-class RandomSearch(search.search_engine.SearchEngine):
+class RandomSearch(search_engine.SearchEngine):
     '''The class definition for the random search algorithm'''
 
     #------------------------------------------------------

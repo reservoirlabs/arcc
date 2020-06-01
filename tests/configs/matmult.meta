@@ -1,0 +1,14 @@
+MORPH_SELECT_SMP_MATMULT {
+ option = "geom=$geom$";
+ var geom = ["{20}","{20}","{10}","{20}"]; 
+}
+MPLACETILE_SMP_MATMULT {
+ option = "lenient=$lenient$,small_loops=$small_loops$,sizes=$sizes$";
+ var lenient = ["true","false"]; 
+ var small_loops = ["true","false"]; 
+ var sizes = ["{64-1024-1024}","{64-512-1024}","{32-1024-1024}","{64-1024-512}","{64-256-1024}","{32-512-1024}","{64-512-512}","{32-1024-512}","{32-512-512}","{32-128-512}","{64-1024-256}","{64-256-512}","{64-1024-128}","{64-64-1024}","{32-512-128}","{64-512-256}","{1-1-1}"]; 
+}
+POLYHEDRALMAPPERTACTIC_SMP_MATMULT {
+ option = "max_sink=$max_sink$";
+ var max_sink = ["true","false"]; 
+}

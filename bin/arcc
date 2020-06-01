@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+import pathlib
+import sys
+
+"""
+Wrapper file that calls arcc_main.py directly after setting up some path stuff.
+"""
+
+
+def get_arcc_home() -> pathlib.Path:
+    """
+    Get ARCC home (e.g., ~/work/arcc) based on a relative path of this file.
+    """
+    tr = pathlib.Path(__file__).parent.parent.absolute()
+    # just in case this moves around
+    assert tr.exists()
+    assert tr.name == "arcc"
+    return tr
+
+
+if __name__ == "__main__":
+    # append arcc home to python path, to import other modules.
+    # this also means other modules don't need to bother with this.
+    sys.path.append(str(get_arcc_home()))
+    # only import after appending path
+    import src.arcc_main
+    # forward the main call
+    src.arcc_main.main()
