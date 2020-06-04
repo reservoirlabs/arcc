@@ -44,10 +44,10 @@ class AssignmentHandler(ABC):
         pass
 
     @abstractmethod
-    def rstream_production(self, magic_env: Dict[str, str]):
+    def rstream_production(self, production_env: Dict[str, str]):
         """
         Evaluate in r-stream production mode
-        @param magic_env: environment variable flags to set
+        @param production_env: environment variable flags to set
         """
         pass
 
@@ -136,7 +136,7 @@ class DefaultHandler(AssignmentHandler):
                           f"{build} && "
                           f"{self.run}`")
 
-    def rstream_production(self, magic_env):
+    def rstream_production(self, production_env):
         """
         To do production, run just the clean and build commands, with some extra
         environment variables.
@@ -149,7 +149,7 @@ class DefaultHandler(AssignmentHandler):
             run_env = os.environ.copy()
             # update the environment
             if stage == "build":
-                run_env.update(magic_env)
+                run_env.update(production_env)
             get_logger().debug("running " + cmd_data)
             # run, handle errors
             proc = sp.run(cmd_data, shell=True, env=run_env,
@@ -213,18 +213,18 @@ class PythonFuncHandler(AssignmentHandler):
         """
         pass
 
-    def rstream_production(self, magic_env):
+    def rstream_production(self, production_env):
         """
         For production, simply call clean and build with environment set.
-        @param magic_env:
+        @param production_env:
         @return:
         """
         self.clean()
-        for key, val in magic_env.items():
+        for key, val in production_env.items():
             os.environ[key] = val
 
         self.build()
-        for key in magic_env:
+        for key in production_env:
             del os.environ[key]
 
 

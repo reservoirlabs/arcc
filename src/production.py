@@ -267,14 +267,14 @@ def produce_rstream_argfile(assignment_handler, output) -> Path:
     separate out the R-Stream specific logic, but leaving it here for now.
     """
     meta_file = output.joinpath("arcc.meta")
-    magic_env = {
+    production_env = {
         "ARCC_METADATA": str(meta_file),
         "ARCC_OPTIONUSEMODE": "default",
         "ARCC_MODE": "produce",
     }
     # actually perform production. this varies on the assignment handler,
     # since it's like we're running "without an assignment"
-    assignment_handler.rstream_production(magic_env)
+    assignment_handler.rstream_production(production_env)
     assert meta_file.exists(), "R-Stream failed to make the argfile"
     return meta_file
 
