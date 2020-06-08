@@ -115,8 +115,8 @@ def get_arg_parser() -> argparse.ArgumentParser:
 
 
 def programmatic_main(clean: Callable[[], None],
-                      build: Callable[[], None],
-                      run: Callable[[], Optional[float]],
+                      build: Callable[[], Optional[bool]],
+                      run: Callable[[], Optional[Tuple[bool, float]]],
                       argfile: Optional[Path] = None,
                       search_class: ClassVar[Optional["SearchStrategy"]] = None,
                       max_iter: Optional[int] = None,
@@ -128,8 +128,8 @@ def programmatic_main(clean: Callable[[], None],
     A "programmatic" frontend to arcc. Rather than specifying clean, build, and
     run commands, the user can specify python functions to be called.
     @param clean: callback for cleaning
-    @param build: callback for building
-    @param run: callback for running
+    @param build: callback for building (can return whether error occurred)
+    @param run: callback for running (can return whether error occurred, time)
     @param argfile: path to input argfile, or none for R-Stream generation
     @param search_class: search class to use, or none for mutation
     @param max_iter: max iterations, or none for unbounded

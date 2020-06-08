@@ -2,13 +2,24 @@ import os
 import shutil
 import subprocess as sp
 import time
-from pathlib import Path
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Optional, Tuple, Dict, TextIO, Callable
 
 from src.arcc_main import get_logger
 from src.assignment import Assignment
 from src.production import Config, StringFormatter, TunableArg
+from contextlib import contextmanager
+
+
+@contextmanager
+def add_to_env(kv_pairs: dict):
+    orig_dict = os.environ.copy()
+    try:
+        os.environ.update(kv_pairs)
+        yield
+    finally:
+        os.environ = orig_dict
 
 
 class AssignmentHandler(ABC):
@@ -172,8 +183,8 @@ class PythonFuncHandler(AssignmentHandler):
     in the assignment directly
     """
     def __init__(self, clean: Callable[[], None],
-                 build: Callable[[], None],
-                 run: Callable[[], Optional[float]]):
+                 build: Callable[[], Optional[bool]],
+                 run: Callable[[], Optional[Tuple[bool, float]]]):
         """
         @param clean: clean callback
         @param build: build callback
@@ -191,21 +202,24 @@ class PythonFuncHandler(AssignmentHandler):
         for each stage, ensuring the environment variables are updated for it.
         """
         self.clean()
-        for key, val in new_pairs.items():
-            os.environ[key] = val
-        self.build()
-        # note: this removes a key if it was set before the original call, so
-        # doesn't perfectly preserve the env, but I couldn't find a quick way
-        # to save/reload an entire environment easily
-        for key in new_pairs:
-            del os.environ[key]
-        start = time.time()
-        self_time = self.run()
-        end = time.time()
-        # if the user specifies a value, use that instead of ours
-        if self_time is None:
-            self_time = end - start
-        return False, self_time
+        with add_to_env(new_pairs):
+            res = self.build()
+            # res could be None (user didn't report status), False (no error),
+            # or True (error occurred)
+            if res is not None:
+                if res:
+                    return True, 0.0
+            start = time.time()
+            res = self.run()
+            end = time.time()
+            if res is not None:
+                error_occurred, self_time = res
+                if error_occurred:
+                    return True, 0.0
+            else:
+                error_occurred = False
+                self_time = end - start
+            return error_occurred, self_time
 
     def epilogue(self, assignment, new_pairs):
         """
@@ -216,16 +230,13 @@ class PythonFuncHandler(AssignmentHandler):
     def rstream_production(self, production_env):
         """
         For production, simply call clean and build with environment set.
-        @param production_env:
-        @return:
+        @param production_env: env keys for production
         """
         self.clean()
-        for key, val in production_env.items():
-            os.environ[key] = val
-
-        self.build()
-        for key in production_env:
-            del os.environ[key]
+        with add_to_env(production_env):
+            res = self.build()
+            if res is not None and res:
+                assert res, "failed to build during production"
 
 
 def consumption(config: Config, root: TunableArg,

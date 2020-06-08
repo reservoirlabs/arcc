@@ -275,7 +275,7 @@ def produce_rstream_argfile(assignment_handler, output) -> Path:
     # actually perform production. this varies on the assignment handler,
     # since it's like we're running "without an assignment"
     assignment_handler.rstream_production(production_env)
-    assert meta_file.exists(), "R-Stream failed to make the argfile"
+    assert meta_file.exists(), "failed to make the argfile"
     return meta_file
 
 
