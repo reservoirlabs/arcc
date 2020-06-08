@@ -147,7 +147,11 @@ class MutationSearch(SearchStrategy):
             # once we've restarted enough times, give up
             if self.restarts >= self.MAX_RESTARTS:
                 return None
-            return self.root.get_arbitrary_assignment()
+            # keep trying random assignments until we find a valid one
+            while True:
+                assignment = self.root.get_arbitrary_assignment()
+                if self.root.is_valid_assignment(assignment):
+                    return assignment
         else:
             mutated = self.curr_assignment.path_assignments()
             # only if there's anything to mutate

@@ -73,12 +73,9 @@ class Assignment:
                 tr += [([child], val)]
         return tr
 
-    def flattened_str(self) -> str:
+    def __str__(self) -> str:
         return '\n'.join(f"{'.'.join(key)}: {val}"
                          for key, val in self.path_assignments())
-
-    def __str__(self) -> str:
-        return self.flattened_str()
 
     # forward hash/eq to the immutable representation
     def __hash__(self):
