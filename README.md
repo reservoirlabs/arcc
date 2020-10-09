@@ -1,8 +1,8 @@
-This is an implementation of the ARCC Protocol, a flexible auto-tuning framework, in Python.
+This is an implementation of the ARCC Protocol, a flexible auto-tuning framework, in Python. It's used to tune compiler options for R-Stream to make the fastest code.
 
 # How it works
 
-The user specifies a clean, build, and run command, as well as arguments to tune with their possible values. The auto-tuner wil try varying with various possible assignments, and use a search strategy to find an optimal assignment and report to the user.
+The user specifies a clean, build, and run command, as well as arguments to tune with their possible values. The auto-tuner wil try various possible assignments, and use a search strategy to find an optimal assignment and report to the user.
 
 # Running + Testing
 
