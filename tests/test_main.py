@@ -1,8 +1,24 @@
 import json
 import os
+import shutil
 import subprocess as sp
 import tempfile
 from pathlib import Path
+
+rqa = False
+
+
+def report_test(test_name: str):
+    if rqa:
+        # locate RQA
+        rqa_cmd = shutil.which('run_test')
+        if rqa_cmd is None:
+            rqa_cmd = os.path.join(os.environ["RSTREAM_HOME"],
+                                   'rqa', 'bin', 'run_test')
+            assert os.path.isdir(rqa_cmd)
+
+        # since can't report directly, just report a trivial success
+        sp.run([rqa_cmd, test_name, '-s', 'true'], check=True)
 
 
 def test_rstream_production():
@@ -34,6 +50,8 @@ def test_rstream_production():
     # and worried about non-determinism and subtle changes in R-Stream breaking
     # the test.
 
+    report_test('arcc_rstream_production')
+
 
 def test_conversion():
     """
@@ -55,6 +73,7 @@ def test_conversion():
 
     assert res == expected_result, \
         "failed to convert from classic to new format"
+    report_test('arcc_conversion')
 
 
 def test_sleep_consumption():
@@ -92,6 +111,8 @@ def test_sleep_consumption():
     key, val = list(optimal.items())[0]
     assert key == "sleep_duration", "invalid variable"
     assert .3 <= val <= .5, "value doesn't satisfy constraint"
+
+    report_test('arcc_sleep_consumption')
 
 
 def test_programmatic_sleep():
@@ -151,6 +172,8 @@ def test_programmatic_sleep():
     assert opt_dir.joinpath("sleep.sh").exists(), \
         "sleep.sh should have been preserved"
 
+    report_test('arcc_programmatic_sleep')
+
 
 def test_matmult():
     """
@@ -174,6 +197,8 @@ def test_matmult():
         print(proc.stdout)
         assert False
 
+    report_test('arcc_matmult')
+
 
 def main():
     """
@@ -188,7 +213,11 @@ def main():
     parser = argparse.ArgumentParser(
         description='Testing script for ARCC')
     parser.add_argument("--verbose", "-v", action="store_true")
+    parser.add_argument("--rqa", action="store_true")
     args = parser.parse_args()
+
+    global rqa
+    rqa = args.rqa
 
     if args.verbose:
         src.arcc_main.initialize_logger(None, True)
